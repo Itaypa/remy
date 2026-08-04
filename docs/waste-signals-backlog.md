@@ -18,9 +18,23 @@ metadata-only.
 | S3 | **Bash instead of dedicated tools** — `cat`/`grep`/`find`/`head`/`ls` via Bash | Anthropic explicitly instructs agents to prefer Read/Grep/Glob: Bash variants dump unbounded output into context, skip pagination/truncation, and often re-run after permission prompts | `classifyCommand` gained a `read-cmd` class (in-memory, like `no-verify` — nothing persisted); ≥6 such calls per session fires, first 2 free at ~1.5k each. Write/action forms of the same words (`cat > file`, `find … -delete`, any redirect) fall back to `other` — a false negative is silence, a false positive is a wrong tip | `tools-over-bash` | **shipped** |
 | S4 | **CLAUDE.md missing / bloated** (taxonomy 2c) | Missing: agent re-derives project facts every session (Anthropic's #1 best practice). Bloated: competes with the task for attention, taxes every session | `stat()` (never a read) the memory family the host would actually load — cwd walked up through its parents, plus `~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` — summed into a **local-only** `sessions.claude_md_bytes` column. Resolving cwd alone was rejected: it reports "no CLAUDE.md" to anyone running from a subdirectory (this repo included). NULL ≠ 0 (never probed vs genuinely absent). Missing fires only alongside `reread-churn` and **replaces** it; bloat is measured in bytes (≥20k), not lines — bytes/line is too unstable to convert — and yields to `context-tax`, whose fix already says to prune | new tip `claude-md-missing`; `claude-md-prune` (was a wisdom tip, now rule-backed) | **shipped** |
 | S5 | **Whole-file rewrite churn** — repeated `Write` to the same existing file instead of targeted `Edit` | Regenerating a whole file pays full output price for every unchanged line; Anthropic: surgical edits | ≥3 `Write` calls to the same target-hash in one session | ~~`surgical-edits`~~ | **dropped** — measured, see below |
-| S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** |
+| S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** — unblocked, needs calibration data (see note) |
 | S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | `clear-between-tasks` (exists as wisdom tip → gains a real rule) | **backlog** |
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Unlocks cross-session verify-habit rules and admin hygiene aggregates | Persist the existing closed `classifyCommand` enum onto `tool_use` events; closed enum → structurally content-free. Breaking design change: must update `privacy.test.ts` + server `ingest-privacy` suite | — (infrastructure) | **backlog** |
+
+## S6 is unblocked but not yet calibratable
+
+S6 reads `tool_fails / tool_calls` off the session row, and that column was
+structurally always zero until the `PostToolUseFailure` hook landed:
+`PostToolUse` fires *only after a tool call succeeds*, so the old
+`tool_response`-sniffing never returned true once in 2,125 recorded calls.
+
+The counter is correct from that fix onward, but there is **no historical data
+to pick a threshold against** — every stored session reads 0% failure. The
+draft floor (≥25% over ≥12 calls) is therefore still a guess. Give it a few
+days of real sessions, measure the actual distribution the way S5 was measured,
+*then* build it. Shipping a threshold calibrated on nothing is how a tip gets a
+reputation for crying wolf.
 
 ## Dropped after measurement
 

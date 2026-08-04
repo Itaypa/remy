@@ -139,6 +139,11 @@ try {
 const tool = remy(["ingest"], hook("PostToolUse", { tool_name: "Bash", tool_input: { command: "ls" }, tool_response: {} }));
 expect("PostToolUse exits 0", tool.code === 0, tool.err);
 
+// Failures arrive as their own event — PostToolUse only fires on success, so
+// this is the only path by which tool_fails ever moves off zero.
+const toolFail = remy(["ingest"], hook("PostToolUseFailure", { tool_name: "Bash", tool_input: { command: "ls /nope" }, tool_output: { isError: true } }));
+expect("PostToolUseFailure exits 0", toolFail.code === 0, toolFail.err);
+
 const compact = remy(["ingest"], hook("PreCompact", { trigger: "auto" }));
 expect("PreCompact(auto) exits 0", compact.code === 0, compact.err);
 
@@ -230,7 +235,17 @@ expect("adapt queues a catalog tip", /tip queued/.test(adapt.stdout.toString()),
 const { Database } = await import("bun:sqlite");
 const sql = new Database(join(data, "remy.db"), { readonly: true });
 const adaptive = sql.query(`SELECT tip_id, session_id, status, why FROM tips WHERE why IS NOT NULL`).all();
+// PostToolUse only fires on success, so a failed call can reach the counters
+// by exactly one route: the PostToolUseFailure event fired above. If this
+// reads 0, tool_fails is silently stuck at zero again and every rule and
+// report built on it is blind.
+const counters = sql.query(`SELECT tool_calls, tool_fails FROM sessions WHERE session_id = ?`).get(SID);
 sql.close();
+expect(
+  "a failed tool call lands in tool_fails",
+  counters?.tool_fails === 1 && counters?.tool_calls === 2,
+  JSON.stringify(counters),
+);
 expect(
   "the adaptive tip is queued with session_id NULL and the model's why line",
   adaptive.length === 1 && adaptive[0].tip_id === "plan-mode" && adaptive[0].session_id === null && /skipped plan mode/.test(adaptive[0].why ?? ""),

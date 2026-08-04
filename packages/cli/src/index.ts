@@ -191,11 +191,21 @@ async function ingest(): Promise<void> {
       }
       break;
     }
+    // PostToolUse fires ONLY after a tool call succeeds — failures arrive as a
+    // separate PostToolUseFailure event. Sniffing tool_response for an error
+    // flag therefore never once returned true: across 2.1k recorded calls on
+    // this developer's machine, tool_fails sat at 0 while the same sessions'
+    // transcripts held 81 is_error results. That made "N failed" in /remy a
+    // constant zero and told the adaptive coach nobody ever fails a tool.
+    // The event name is the signal — no payload shape to guess at, and the
+    // old sniff stays as a fallback for hosts predating the split.
+    case "PostToolUseFailure":
     case "PostToolUse": {
       const input = payload.tool_input;
-      const resp = payload.tool_response;
+      const resp = payload.tool_response ?? payload.tool_output;
       const failed =
-        !!resp && typeof resp === "object" && ((resp as any).is_error === true || (resp as any).success === false);
+        hook === "PostToolUseFailure" ||
+        (!!resp && typeof resp === "object" && ((resp as any).is_error === true || (resp as any).isError === true || (resp as any).success === false));
       const rawTarget =
         input && typeof input === "object"
           ? ((input as any).file_path ?? (input as any).notebook_path ?? (input as any).path ?? (input as any).command ?? (input as any).url)

@@ -38,6 +38,9 @@ check("hooks and commands point at the launcher", async () => {
   const hooks = await Bun.file("packages/plugin-claude-code/hooks/hooks.json").text();
   if (hooks.includes("/bin/coach")) return "hooks.json still references the old bin/coach";
   if (!hooks.includes("/bin/remy")) return "hooks.json does not reference bin/remy";
+  // PostToolUse fires only on success; without the failure event registered,
+  // tool_fails is structurally always 0 and nothing built on it can work.
+  if (!hooks.includes("PostToolUseFailure")) return "hooks.json does not register PostToolUseFailure — tool failures would go uncounted";
   return null;
 });
 
