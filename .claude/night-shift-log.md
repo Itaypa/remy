@@ -1,48 +1,83 @@
 # Night-shift log
 
-Cycles that produced no commit, and verification runs worth not repeating.
-Committed cycles are in `git log --grep="Night-Shift:"`.
+Committed cycles are in `git log --grep="Night-Shift:"`. This file holds the
+morning report and any cycle that produced no commit.
 
-## 2026-08-05 · rung-1 sweep and compiled-binary soak — no code change
+---
 
-**The live log is fully explained.** `~/.coach/remy.log` contains exactly two
-error kinds and nothing else:
+# Morning report — night of 2026-08-04 → 05
 
-| count | error | status |
-|---|---|---|
-| 192 | `[statusline] SQLiteError: database is locked` | fixed — `busy_timeout` now precedes every other statement (`cd57ad6`) |
-| 164 | `[spinner] SyntaxError: JSON Parse error` | not a product bug — **all 164** trace to `spinner.test.ts`; the suite was writing into the real data dir (`e24de9d`) |
+29 cycles, 30 commits, all on `main`, each individually revertible via its
+`Night-Shift:` trailer. Suite went 170 → 257 tests; line coverage 88.9% → 95.9%.
 
-No third category, and no unexplained entry. Worth knowing before anyone reads
-that file and re-investigates: the remaining lines are history, not symptoms.
+## Do these three first (each needs a human, none takes long)
 
-**The compiled binary is clean under concurrency.** The lock fix was measured
-through `bun run` on TypeScript, so it was re-checked against a real
-`bun build --compile` artifact: 160 concurrent `statusline`/`ingest`/
-`PermissionDenied` invocations against one database →
+1. **`bun run build`.** `~/.remy/bin/current` is `0.3.1+dfe56dd` from 23:55 and
+   predates every fix below, so none of them are live for you yet. Not run
+   unattended: it replaces the statusline and hooks, the launcher fails
+   silently, and a bad build would mean silently no coaching with nobody
+   watching.
+2. **Run `/compact` once, then check `compacts_manual`** on the newest session.
+   No compaction has happened since `PreCompact` was registered, so whether it
+   fires is genuinely unknown. A 1 closes the question. A 0 makes it urgent —
+   `auto-compact` (~60k 🪙, the catalog's largest) is filed only from that
+   branch.
+3. **Decide what `/remy`'s tool counts mean** (S10). They currently include
+   subagent work while the tips beside them are main-chain only. Two defensible
+   designs, both ~10 minutes; the choice is about what the report says, not a
+   bug fix.
 
-    non-zero exits 0 · "database is locked" 0 · any logged error 0
-    statusline fell back to "⚡ remy" 0
-    counters {tool_calls: 40, tool_fails: 0, perm_denials: 40}
+## What was actually broken, and is now fixed
 
-Counters are exactly right: `PermissionDenied` correctly does not inflate
-`tool_calls`. Not added to the run-remy driver — `store-lock.test.ts` already
-guards the regression deterministically, and a soak stage would cost ~10s per
-run and add timing flakiness for no extra signal.
+- **The statusline lost 192 database races in one day.** `busy_timeout` was set
+  on the line *after* the statement that needed it, so raising it from 250ms to
+  2000ms had never helped. Reordering is the whole fix; verified at 960
+  contended opens (old: 8–68 failures per run, new: 0) and again at 480
+  concurrent compiled-binary invocations.
+- **Tool failures were never counted.** `PostToolUse` fires only on success;
+  `PostToolUseFailure` was never registered, so `tool_fails` was 0 across 2,125
+  calls for the product's entire life. `/remy` said "0 failed" always, and the
+  adaptive coach was told you never fail a tool.
+- **The statusline could print `{edits}` at you.** The adaptive analyzer files
+  tips with no session evidence and may pick any catalog id, so rule-backed
+  templates rendered raw. Now falls back to the tip's title.
+- **`bun test` was writing into your real `~/.remy` log.** 164 `[spinner]`
+  entries in a live diagnostic file, from a test fixture.
+- **S4 shipped**: `claude-md-missing` / `claude-md-prune`, resolving the memory
+  family the host actually loads rather than just cwd.
 
-**Repo hygiene checked, nothing found:** no `TODO`/`FIXME`/`HACK` markers in
-tracked source, no skipped or todo tests, preflight green, `bun run mutate`
-green (24/25 caught, 1 documented accepted survivor).
+## What was deliberately *not* built
 
-### Two things for a human
+Four proposals died on measurement, which is the point of measuring:
 
-- **The live install is behind.** `~/.remy/bin/current` is `0.3.1+dfe56dd`,
-  built 23:55, which predates the statusline lock fix and the
-  `PermissionDenied` work. `bun run build` picks them up. Deliberately not run
-  unattended: it replaces the live statusline and hooks, and the launcher fails
-  silently, so a bad build is silently no coaching with nobody watching.
-- **`packages/marketing/` is an empty shell** — only `.astro/` and
-  `node_modules/`, no source, nothing tracked. Leftover from an abandoned
-  package. It is in the untracked set, so it was left alone; delete it by hand
-  if it is dead. `CLAUDE.md`'s repo layout does not list it, which is correct
-  if it goes.
+- **S5** (whole-file rewrites) — fires on 3 of 50 sessions, a third of them on
+  plan/memory markdown where the advice is wrong; ~1k tokens of real waste.
+- **S7** (marathon sessions) — its firing set is a strict subset of
+  `cache-idle`'s. Measures interruption, not topic change.
+- **S8** (persist `cmd_class`) — deferred; the events table folds subagent work
+  into the parent, so it would measure a different population than the rules do.
+- **`remy doctor`** — proposed and killed: its checks would have been green
+  through both bugs they were meant to catch.
+
+## One retraction
+
+I reported that `PreCompact` appears never to fire, near-certain, citing a
+compaction inside a session REMY was recording. Wrong: the hook was registered
+at 21:58 that evening and every recorded compaction predates it. I had conflated
+"REMY was recording" with "this hook was registered". Corrected in the backlog;
+item 2 above is what settles it.
+
+## Standing tools
+
+- `bun run mutate` — breaks one invariant at a time in a throwaway worktree and
+  fails if the suite doesn't notice. 35 entries, 34 caught, 1 documented
+  accepted survivor. Two harness bugs were found and fixed by using it.
+- `preflight` now derives its hook checks from source rather than a hardcoded
+  list that had stopped growing.
+
+## Why the loop stopped
+
+The backlog is resolved, rung 1 is clean and re-verified, coverage is 95.9%
+with what remains being `ansi()`, `binDir()` and defensive catches, and rung 3's
+findings are recorded. Continuing would have meant adding marginal commits that
+make the ~8 that matter harder to find. Restart any time with `/night-shift`.
