@@ -94,6 +94,34 @@ describe("PermissionDenied ingest", () => {
     }
   });
 
+  test("PostToolUseFailure counts against tool_fails, not just tool_calls", async () => {
+    // preflight checks that the hook is registered and that a case label
+    // exists, but it compares labels, not behaviour: PostToolUseFailure falls
+    // through to the PostToolUse branch, and the whole effect is one clause
+    // (`hook === "PostToolUseFailure" ||`). Delete that clause and every
+    // static check stays green while tool_fails returns to structurally
+    // always-zero — which is the bug this all came from.
+    await ingest({
+      hook_event_name: "PostToolUse",
+      session_id: "s1",
+      cwd: "/tmp/x",
+      tool_name: "Bash",
+      tool_input: { command: "ls" },
+    });
+    await ingest({
+      hook_event_name: "PostToolUseFailure",
+      session_id: "s1",
+      cwd: "/tmp/x",
+      tool_name: "Bash",
+      tool_input: { command: "ls /nope" },
+      tool_output: { isError: true },
+    });
+    const rows = sessions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tool_calls).toBe(2);
+    expect(rows[0].tool_fails).toBe(1);
+  });
+
   test("a malformed payload still exits 0 and stays silent", async () => {
     const proc = Bun.spawn(["bun", CLI_ENTRY, "ingest"], {
       env: { ...process.env, REMY_DATA_DIR: dataDir, REMY_HOME: dataDir, REMY_SETTINGS_PATH: join(dataDir, "settings.json") },

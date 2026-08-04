@@ -47,11 +47,92 @@ check("hooks and commands point at the launcher", async () => {
 // A missing hook doesn't error — it silently deletes a whole surface. Stop
 // alone owns the tip nudge, the context alarm, and the spinner refresh, and it
 // has been dropped by accident once already.
-check("every hook event is registered", async () => {
+//
+// Derived from the source rather than listed here, deliberately. The hardcoded
+// list this replaces covered five events and had not grown with the code:
+// PostToolUseFailure and PermissionDenied were both handled in ingest and
+// absent from it, so deleting either hook block left this check green — and
+// deleting either one returns a counter to structurally-always-zero, which is
+// the exact bug class both were added to fix. A list you have to remember to
+// update is a list that lies.
+/** The body of ingest's `switch (hook)`, or null if it can't be delimited.
+ * Both hook checks work from this rather than the whole file: index.ts is ~880
+ * lines and contains unrelated `case`/`type:` literals (settings.json writes
+ * use `type: "command"`), any of which could mask a real gap. */
+async function ingestSwitchBody(): Promise<string | null> {
+  const src = await Bun.file("packages/cli/src/index.ts").text();
+  const start = src.indexOf("switch (hook) {");
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = src.indexOf("{", start); i < src.length; i++) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i);
+    }
+  }
+  return null;
+}
+
+check("hooks.json and the ingest switch agree", async () => {
   const hooks = await Bun.file("packages/plugin-claude-code/hooks/hooks.json").json();
-  const want = ["SessionStart", "PostToolUse", "PreCompact", "Stop", "SessionEnd"];
-  const missing = want.filter((e) => !hooks.hooks?.[e]);
-  return missing.length === 0 ? null : `hooks.json is missing: ${missing.join(", ")}`;
+  const registered = new Set(Object.keys(hooks.hooks ?? {}));
+  if (registered.size === 0) return "hooks.json registers nothing";
+
+  // Note the limit: this compares *labels*, not behaviour. A case that exists
+  // but whose effect was refactored away still reads as handled, and removing
+  // a hook together with its label leaves both sets agreeing. The existence
+  // pin for PostToolUseFailure in the check above is therefore not redundant,
+  // and PermissionDenied is pinned by cli/test/ingest.test.ts. Keep both.
+  const body = await ingestSwitchBody();
+  if (body === null) return "could not delimit the ingest switch — this check needs updating, not silencing";
+  const handled = new Set([...body.matchAll(/case "([A-Z]\w+)":/g)].map((m) => m[1]!));
+
+  const unhandled = [...registered].filter((e) => !handled.has(e));
+  const unregistered = [...handled].filter((e) => !registered.has(e));
+  const problems: string[] = [];
+  if (unhandled.length > 0) problems.push(`registered but ignored by ingest: ${unhandled.join(", ")}`);
+  // The costlier direction: the code believes it is collecting something the
+  // host was never asked to send, so the data is silently always empty.
+  if (unregistered.length > 0) problems.push(`handled by ingest but never registered: ${unregistered.join(", ")}`);
+  return problems.length === 0 ? null : problems.join("; ");
+});
+
+// Same failure shape one layer down: an event type nothing ever writes reads
+// as "this never happens" forever, and no test can tell the difference.
+check("every event type has a writer", async () => {
+  const schema = await Bun.file("packages/core/src/schema.ts").text();
+  const block = /EventTypeSchema = z\.enum\(\[([\s\S]*?)\]\)/.exec(schema);
+  if (!block) return "could not find EventTypeSchema — this check needs updating, not silencing";
+  const declared = [...block[1]!.matchAll(/"(\w+)"/g)].map((m) => m[1]!);
+
+  // Scoped to the switch body, not the whole file: `type: "command"` in the
+  // settings.json writers would otherwise count as a writer, and any future
+  // object literal using `type: "stop"` elsewhere would mask a real orphan.
+  // Take the whole `type:` expression and pull every literal out of it, so a
+  // ternary (Stop and SessionEnd share one) contributes both of its arms.
+  const body = await ingestSwitchBody();
+  if (body === null) return "could not delimit the ingest switch — this check needs updating, not silencing";
+  const written = new Set<string>();
+  for (const m of body.matchAll(/\btype:\s*([^,\n]+)/g)) {
+    for (const lit of m[1]!.matchAll(/"(\w+)"/g)) written.add(lit[1]!);
+  }
+
+  // Documented exception. Unlike a runtime allowlist, every way this can go
+  // stale is benign — a dead entry suppresses nothing, and a NEW orphan still
+  // fails — so it stays one line with its reason attached.
+  const KNOWN_UNWRITTEN: Record<string, string> = {
+    prompt: "batch-2b (UserPromptSubmit cadence events) was never built; the enum member is reserved. UserPromptSubmit carries raw prompt text, so if it is ever wired the payload must stay cadence-only.",
+  };
+
+  // An exception that outlives its enum member is itself a staleness signal.
+  const ghosts = Object.keys(KNOWN_UNWRITTEN).filter((t) => !declared.includes(t));
+  if (ghosts.length > 0) return `KNOWN_UNWRITTEN names event type(s) that no longer exist: ${ghosts.join(", ")}`;
+
+  const orphans = declared.filter((t) => !written.has(t) && !(t in KNOWN_UNWRITTEN));
+  return orphans.length === 0
+    ? null
+    : `event type(s) with no writer in ingest: ${orphans.join(", ")} — either write them or drop them from the enum`;
 });
 
 check("typecheck", async () => {

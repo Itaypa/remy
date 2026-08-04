@@ -103,7 +103,11 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   since a surviving mutation is a code-health signal, not a reason to block a
   release). Note it runs against **HEAD**, so uncommitted work isn't under test.
 - Claude Code surfaces used by the adapter: hooks (`SessionStart`, `PostToolUse`,
-  `PreCompact`, `Stop`, `SessionEnd`), statusline command (constant single-layout HUD;
+  `PostToolUseFailure`, `PermissionDenied`, `PreCompact`, `Stop`, `SessionEnd` — note
+  `PostToolUse` fires **only on success**, which is why the failure event exists;
+  `PermissionRequest` is deliberately **not** registered, because stdout on that event
+  is an allow/deny decision and a coaching tool has no business in the approval path),
+  statusline command (constant single-layout HUD;
   `refreshInterval` keeps it fresh between host repaints), plugin commands, and
   `${CLAUDE_PLUGIN_ROOT}` for portable paths. Hook handlers read the event JSON from stdin
   and must exit fast (<50ms target). `Stop`'s payload carries raw assistant response text
