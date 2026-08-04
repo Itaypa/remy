@@ -244,6 +244,86 @@ const MUTATIONS: Mutation[] = [
     scope: `${CLI}/test/launcher.test.ts`,
   },
 
+  // ── not losing the developer's own history ──────────────────────────────
+  {
+    defends: "when both databases exist, the new one wins — history must not fork",
+    file: `${CORE}/src/store.ts`,
+    from: '  const current = join(dir, "remy.db");\n  if (existsSync(current)) return current;',
+    to: '  const current = join(dir, "remy.db");',
+    scope: `${CORE}/test/paths.test.ts`,
+  },
+  {
+    defends: "a directory from the coach era still resolves to its coach.db",
+    file: `${CORE}/src/store.ts`,
+    from: "  return existsSync(legacy) ? legacy : current;",
+    to: "  return current;",
+    scope: `${CORE}/test/paths.test.ts`,
+  },
+  {
+    defends: "an unset flag is not a disabled flag",
+    file: `${CORE}/src/env.ts`,
+    from: "  if (raw === undefined) return undefined;",
+    to: "  if (raw === undefined) return false;",
+    scope: `${CORE}/test/paths.test.ts`,
+  },
+
+  // ── the 7-day window everything cross-session reads ─────────────────────
+  {
+    defends: "the week's boundary is inclusive — a session on the line still counts",
+    file: `${CORE}/src/store.ts`,
+    from: "WHERE started_at >= ? ORDER BY started_at ASC",
+    to: "WHERE started_at > ? ORDER BY started_at ASC",
+    scope: `${CORE}/test/store.test.ts`,
+  },
+
+  // ── what actually reaches the user's eyes ───────────────────────────────
+  {
+    defends: "a token count never renders as NaN or InfinityM",
+    file: `${CLI}/src/ui.ts`,
+    from: '  if (!Number.isFinite(n)) return "0";\n',
+    to: "",
+    scope: `${CLI}/test/ui.test.ts`,
+  },
+  {
+    defends: "the analyzer's own sentence replaces the templated one in /remy",
+    file: `${CLI}/src/ui.ts`,
+    from: "opts.active.why ? `🤖 ${opts.active.why}` : renderTemplate(def.what, vars)",
+    to: "renderTemplate(def.what, vars)",
+    scope: `${CLI}/test/report.test.ts`,
+  },
+  {
+    defends: "no tip's `fix` carries a placeholder — /remy renders it without evidence",
+    file: `${CORE}/src/catalog.ts`,
+    from: 'fix: "For every line ask: would deleting this cause a mistake? If not, cut it."',
+    to: 'fix: "Your CLAUDE.md is {kb}KB. For every line ask: would deleting this cause a mistake?"',
+    scope: `${CLI}/test/report.test.ts`,
+  },
+
+  // ── the user's settings file ────────────────────────────────────────────
+  {
+    defends: "an unreadable ownership record means back off, not overwrite",
+    file: `${CLI}/src/spinner.ts`,
+    from: "  try {\n    const parsed = JSON.parse(raw);\n    return Array.isArray(parsed) ? parsed.map(String) : null;\n  } catch {\n    return null;\n  }",
+    to: "  const parsed = JSON.parse(raw);\n  return Array.isArray(parsed) ? parsed.map(String) : null;",
+    scope: `${CLI}/test/spinner.test.ts`,
+  },
+
+  // ── the hook that must never throw ──────────────────────────────────────
+  {
+    defends: "the Stop-hook transcript reader survives a path that isn't a path",
+    file: `${CORE}/src/transcript.ts`,
+    from: "  try {\n    const f = Bun.file(path);\n    if (!(await f.exists())) return null;\n    return parseTranscript(await f.text(), limit);\n  } catch {\n    return null;\n  }",
+    to: "    const f = Bun.file(path);\n    if (!(await f.exists())) return null;\n    return parseTranscript(await f.text(), limit);",
+    scope: `${CORE}/test/transcript.test.ts`,
+  },
+  {
+    defends: "openDb waits out a competing writer instead of failing fast",
+    file: `${CORE}/src/store.ts`,
+    from: '  db.run("PRAGMA busy_timeout = 2000");\n  db.run("PRAGMA journal_mode = WAL");',
+    to: '  db.run("PRAGMA journal_mode = WAL");\n  db.run("PRAGMA busy_timeout = 2000");',
+    scope: `${CORE}/test/store-lock.test.ts`,
+  },
+
   // ── accepted survivors ──────────────────────────────────────────────────
   {
     defends: "settings.json is written atomically, so a crash can't truncate it",
@@ -267,8 +347,14 @@ async function runTests(target?: string): Promise<TestRun> {
     ? await $`bun test ${target}`.cwd(WORKTREE).nothrow().quiet()
     : await $`bun test`.cwd(WORKTREE).nothrow().quiet();
   const text = res.stdout.toString() + res.stderr.toString();
-  const pass = Number(/(\d+) pass/.exec(text)?.[1] ?? 0);
-  const failed = Number(/(\d+) fail/.exec(text)?.[1] ?? 0);
+  // Anchored to the summary lines, which bun prints as " N pass" / " N fail"
+  // at the start of a line. An unanchored /(\d+) fail/ matches inside a failure
+  // diff instead — the rendered /remy report contains "20 calls · 0 failed",
+  // so a genuinely caught mutation parsed as failed=0 and was then reported as
+  // an unrelated INVALID. The harness has to be more trustworthy than the code
+  // it audits, or a green run means nothing.
+  const pass = Number(/^\s*(\d+) pass\s*$/m.exec(text)?.[1] ?? 0);
+  const failed = Number(/^\s*(\d+) fail\s*$/m.exec(text)?.[1] ?? 0);
   return { failed, total: pass + failed };
 }
 
