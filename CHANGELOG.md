@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.1 — the dev-build badge stops following real installs
+
+`isDevInstall()` decided the `⚙ v0.3.0+…` statusline badge by testing whether
+the running binary sat under `.claude/plugins`. It never does: the plugin ships
+a launcher and the real binary always lives in `~/.remy/bin`, so the test was
+false for **every install that has ever existed** and every user saw a dev
+badge. It now reads the channel baked in at build time (`REMY_CHANNEL`), which
+is what the docs always claimed. Covered by a test that compiles both channels
+and inspects the rendered statusline.
+
 ## v0.3.0 — REMY goes open source, and local-only
 
 **The admin plane is gone.** The multi-org server, the dashboard, the Ledger UI

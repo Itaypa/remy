@@ -62,3 +62,49 @@ describe("plugin launcher", () => {
     expect(await proc.exited).toBe(0);
   });
 });
+
+// The dev-build badge is decided by the baked-in channel, not by where the
+// binary sits on disk. An earlier version tested `process.execPath` against
+// ".claude/plugins" — but the plugin ships a launcher and the real binary
+// always lives in ~/.remy/bin, so that test was false for EVERY install and
+// every real user saw a dev badge. Compile both channels and check the
+// rendered statusline, since that is the only place the badge appears.
+describe("dev-build badge — channel decides, not the binary's location", () => {
+  const PAYLOAD = JSON.stringify({
+    session_id: "badge",
+    workspace: { current_dir: "/tmp" },
+    model: { id: "claude-opus-5", display_name: "Opus 5" },
+  });
+
+  async function statuslineFor(channel: string): Promise<string> {
+    const out = join(home, `remy-${channel}`);
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "..", "..", "..", "scripts", "build-plugin.ts"),
+        "--target",
+        TARGET,
+        "--channel",
+        channel,
+        "--out",
+        out,
+      ],
+      { stdout: "ignore", stderr: "pipe", env: { ...process.env, REMY_HOME: home } },
+    );
+    if ((await build.exited) !== 0) throw new Error(await new Response(build.stderr).text());
+    const proc = Bun.spawn([out, "statusline"], {
+      stdin: Buffer.from(PAYLOAD),
+      stdout: "pipe",
+      stderr: "ignore",
+      env: { PATH: process.env.PATH ?? "", HOME: home, REMY_HOME: home, REMY_DATA_DIR: home },
+    });
+    const text = await new Response(proc.stdout).text();
+    await proc.exited;
+    return text;
+  }
+
+  test("a release build shows no ⚙ badge; a dev build does", async () => {
+    expect(await statuslineFor("release")).not.toContain("⚙");
+    expect(await statuslineFor("dev")).toContain("⚙");
+  }, 120_000);
+});

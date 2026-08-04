@@ -82,12 +82,17 @@ const BUILD_ID = typeof REMY_BUILD_ID === "string" ? REMY_BUILD_ID : "src";
 declare const REMY_CHANNEL: string | undefined;
 const CHANNEL = typeof REMY_CHANNEL === "string" ? REMY_CHANNEL : "dev";
 
-/** Dev install = the binary runs from somewhere other than the Claude Code
- * plugin cache (e.g. straight out of the repo). COACH_DEV=1/0 overrides. */
+/** Dev install = this binary was not stamped by a release build.
+ *
+ * Decided by the baked-in channel, NOT by where the binary sits: since the
+ * plugin ships a launcher and the real binary always lives in ~/.remy/bin,
+ * an execPath test ("is it under .claude/plugins?") is false for every
+ * install that has ever existed — which showed the dev badge to real users.
+ * REMY_DEV=1/0 overrides. */
 function isDevInstall(): boolean {
   if (envVar("DEV") === "1") return true;
   if (envVar("DEV") === "0") return false;
-  return !process.execPath.includes(join(".claude", "plugins"));
+  return CHANNEL !== "release";
 }
 
 const argv = process.argv.slice(2);
