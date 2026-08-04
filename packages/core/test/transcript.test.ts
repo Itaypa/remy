@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyCommand, contextFromPayload, parseTranscript, tailContext, type BashClass } from "../src/transcript";
+import { classifyCommand, contextFromPayload, parseTranscript, parseTranscriptFile, tailContext, type BashClass } from "../src/transcript";
 
 function assistantLine(opts: {
   id: string;
@@ -508,5 +508,56 @@ describe("contextFromPayload (statusline payload fast path)", () => {
       context_window: { total_input_tokens: 1, total_output_tokens: 1, context_window_size: 200_000 },
     });
     expect(JSON.stringify(ctx)).not.toContain(MARKER);
+  });
+});
+
+describe("parseTranscriptFile (the Stop-hook reader)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "coach-parsefile-"));
+
+  // This runs inside the Stop/SessionEnd hook. A throw here does not just lose
+  // the analysis: it unwinds to the CLI's global handler, which writes the
+  // stack — containing the raw transcript path — into remy.log. Returning null
+  // is therefore the contract, not a convenience.
+  test("a missing file is null, not a throw", async () => {
+    const stats = await parseTranscriptFile(join(dir, "does-not-exist.jsonl"), 200_000);
+    expect(stats).toBeNull();
+  });
+
+  test("a directory where a file was expected is null, not a throw", async () => {
+    // What a stale or mistyped transcript_path can actually look like. Note
+    // this one is caught by the exists() check rather than the outer catch —
+    // Bun.file(dir).exists() is false. The case below is what exercises the catch.
+    expect(await parseTranscriptFile(dir, 200_000)).toBeNull();
+  });
+
+  test("a path that isn't even a valid path is null, not a throw", async () => {
+    // transcript_path arrives in a hook payload and is not validated anywhere.
+    // A NUL byte makes Bun.file().exists() itself throw a TypeError, so this
+    // is the case the outer try/catch exists for — without it the Stop hook
+    // dies and the global handler logs the raw path.
+    expect(await parseTranscriptFile("/tmp/\0nope.jsonl", 200_000)).toBeNull();
+    expect(await parseTranscriptFile("", 200_000)).toBeNull();
+  });
+
+  test("an empty file parses to an empty session rather than failing", async () => {
+    const p = join(dir, "empty.jsonl");
+    writeFileSync(p, "");
+    const stats = await parseTranscriptFile(p, 200_000);
+    expect(stats).not.toBeNull();
+    expect(stats!.assistantTurns).toBe(0);
+    expect(stats!.toolCalls).toEqual([]);
+  });
+
+  test("a half-written final line is skipped, not fatal", async () => {
+    // The host appends to the transcript while the hook reads it, so catching
+    // the file mid-write is the normal case, not the edge case. The complete
+    // turns before the tear must still be counted.
+    const p = join(dir, "torn.jsonl");
+    const good = assistantLine({ id: "m1", usage: { input_tokens: 1_000, output_tokens: 10 } });
+    writeFileSync(p, `${good}\n{"type":"assistant","message":{"id":"m2","usa`);
+    const stats = await parseTranscriptFile(p, 200_000);
+    expect(stats).not.toBeNull();
+    expect(stats!.assistantTurns).toBe(1);
+    expect(stats!.totals.in).toBe(1_000);
   });
 });
