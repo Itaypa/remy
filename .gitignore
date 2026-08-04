@@ -1,0 +1,25 @@
+node_modules/
+.claude/settings.local.json
+# machine-specific: holds an absolute path to this developer's binary.
+# `remy init` regenerates it.
+.claude/settings.json
+.claude/worktrees/
+# stray compiled-AppleScript artifact written with a literal "undefined" name
+/undefined
+packages/dashboard/dist/
+packages/ui/storybook-static/
+packages/marketing/dist/
+packages/marketing/.astro/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+coverage/
+.*.bun-build
+.vercel
+.env*
+dist/
+games/
+
+# personal dev workflow — machine-specific paths, not part of the product
+.claude/commands/feature-cycle.md

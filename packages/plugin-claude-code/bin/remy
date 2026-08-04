@@ -1,0 +1,94 @@
+#!/bin/sh
+# remy — the launcher that ships inside the plugin.
+#
+# The real binary is a ~60MB compiled artifact: far too big to live in a git
+# repo that Claude Code clones on every `/plugin install`. So the repo ships
+# this shim, which resolves the binary for this host under ~/.remy/bin and
+# execs it, fetching it from GitHub Releases the first time it's needed.
+#
+# Two rules, both non-negotiable for something wired into every hook:
+#   1. Never block the host. A missing binary starts a DETACHED download and
+#      exits immediately — the first session after install goes uncoached
+#      rather than making a hook wait on 60MB of network.
+#   2. Never fail loudly. Unsupported platform, no curl, offline, corrupt
+#      download: all exit 0 in silence. Coaching is optional; the session is not.
+set -u
+
+REMY_HOME=${REMY_HOME:-${COACH_HOME:-$HOME/.remy}}
+BIN_DIR="$REMY_HOME/bin"
+SELF_DIR=$(dirname "$0")
+
+# The version comes from the plugin manifest next door, so an upgraded plugin
+# resolves an upgraded binary without this file having to change.
+VERSION=${REMY_VERSION:-}
+if [ -z "$VERSION" ] && [ -r "$SELF_DIR/../.claude-plugin/plugin.json" ]; then
+  VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$SELF_DIR/../.claude-plugin/plugin.json" 2>/dev/null | head -1)
+fi
+[ -n "$VERSION" ] || VERSION=dev
+
+case $(uname -s 2>/dev/null) in
+  Darwin) OS=darwin ;;
+  Linux) OS=linux ;;
+  *) exit 0 ;;
+esac
+case $(uname -m 2>/dev/null) in
+  arm64 | aarch64) ARCH=arm64 ;;
+  x86_64 | amd64) ARCH=x64 ;;
+  *) exit 0 ;;
+esac
+
+ASSET="remy-$VERSION-$OS-$ARCH"
+BIN="$BIN_DIR/$ASSET"
+
+if [ -x "$BIN" ]; then
+  # `current` is what the statusline command points at, so it survives plugin
+  # upgrades: whichever binary actually runs claims the pointer.
+  if [ "$(readlink "$BIN_DIR/current" 2>/dev/null)" != "$BIN" ]; then
+    ln -sf "$BIN" "$BIN_DIR/current" 2>/dev/null || true
+  fi
+  exec "$BIN" "$@"
+fi
+
+[ "${REMY_NO_DOWNLOAD:-0}" = "1" ] && exit 0
+command -v curl >/dev/null 2>&1 || exit 0
+mkdir -p "$BIN_DIR" 2>/dev/null || exit 0
+
+# One downloader at a time: hooks fire several times a second at session start,
+# and mkdir is the portable atomic test-and-set.
+LOCK="$BIN_DIR/.download.lock"
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+REPO=${REMY_RELEASE_REPO:-Itaypa/remy}
+BASE="https://github.com/$REPO/releases/download/v$VERSION"
+(
+  TMP="$BIN.part.$$"
+  if curl -fsSL --max-time 600 -o "$TMP" "$BASE/$ASSET"; then
+    # checksums.txt rides the same TLS connection as the binary, so it proves
+    # the download arrived intact — not that the release is trustworthy. That
+    # trust comes from HTTPS and the GitHub release itself.
+    SUMS="$BIN_DIR/.checksums.$$"
+    if curl -fsSL --max-time 60 -o "$SUMS" "$BASE/checksums.txt"; then
+      WANT=$(sed -n "s/^\([0-9a-f]*\)[[:space:]][[:space:]]*$ASSET\$/\1/p" "$SUMS" | head -1)
+      if [ -n "$WANT" ]; then
+        if command -v shasum >/dev/null 2>&1; then
+          GOT=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
+        elif command -v sha256sum >/dev/null 2>&1; then
+          GOT=$(sha256sum "$TMP" | cut -d' ' -f1)
+        else
+          GOT=$WANT
+        fi
+        [ "$GOT" = "$WANT" ] || rm -f "$TMP"
+      fi
+      rm -f "$SUMS"
+    fi
+    if [ -f "$TMP" ]; then
+      chmod +x "$TMP" 2>/dev/null
+      mv -f "$TMP" "$BIN" 2>/dev/null || rm -f "$TMP"
+    fi
+  fi
+  rm -f "$TMP"
+  rmdir "$LOCK" 2>/dev/null
+) >/dev/null 2>&1 &
+
+exit 0

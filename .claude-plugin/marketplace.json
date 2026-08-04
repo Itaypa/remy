@@ -1,0 +1,16 @@
+{
+  "name": "remy",
+  "owner": {
+    "name": "Itay Pahima"
+  },
+  "metadata": {
+    "description": "REMY — the coaching layer for AI coding agents. He watches you drive, and tells you what it cost."
+  },
+  "plugins": [
+    {
+      "name": "remy",
+      "source": "./packages/plugin-claude-code",
+      "description": "🐀 In-agent coaching: live statusline stats, waste detection, quantified tips. Metadata-only, zero tokens burned."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "remy",
+  "private": true,
+  "version": "0.3.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun scripts/build-plugin.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test",
+    "preflight": "bun scripts/preflight.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.23",
+    "typescript": "^5.9.0"
+  },
+  "license": "Apache-2.0"
+}
