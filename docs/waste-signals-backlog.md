@@ -159,6 +159,44 @@ Worth knowing when deciding: the rules already disagree with the report.
 transcript data, so today the report's totals and the tips beside them are
 counting different populations.
 
+## Open: `PreCompact` appears never to fire — `auto-compact` may never have fired for anyone
+
+Evidence, from this machine on 2026-08-05:
+
+- **Zero `compact` events, ever.** 2,485 `tool_use`, 80 `stop`, 48 `session_start`
+  — and 0 of type `compact`. `compacts_auto` and `compacts_manual` are 0 across
+  all 59 sessions.
+- **Compactions demonstrably happened.** Eight `compact_boundary` entries across
+  five transcripts (all `trigger: "manual"`, pre-token counts up to 460k).
+- **At least one happened while REMY was actively recording.** Session
+  `1d5874c5` has 156 events spanning 09:28–19:59 on 2026-08-04; its compaction
+  is timestamped 18:16:55, squarely inside that window. No compact event, no
+  counter increment.
+- **The handler is fine and never ran.** `remy.log` contains zero `[ingest]`
+  entries, so nothing threw. The installed plugin (0.3.1) does register
+  `PreCompact`.
+
+Consequences if confirmed: `auto-compact` — the largest estimate in the catalog
+at ~60k 🪙 — can never be filed, because `index.ts` files it **only** from the
+`PreCompact` branch. `detectRedZoneRiding`'s `if (s.autoCompacts > 0) return null`
+suppression is likewise unreachable. And the adaptive payload tells the model
+this developer never compacts, while the transcripts say otherwise.
+
+Not fixed here because the cause is upstream of our code: the handler works
+(the run-remy driver drives `PreCompact` and asserts on it), so the question is
+why the host isn't calling it — a `PostCompact` event also exists now, and the
+host has a `microcompact` path. Deciding that needs an interactive session:
+run `/compact` and watch whether `remy ingest` is invoked.
+
+## Open: the statusline still loses races on the database
+
+`remy.log` shows repeated `[statusline] SQLiteError: database is locked` —
+5 times on 2026-08-04 alone. `busy_timeout` was already raised to 2000ms for
+exactly this, and it is still happening under `refreshInterval` polling plus
+hook writes. The failure is soft (the statusline falls back to `⚡ remy`), which
+is why it went unnoticed. Worth a look at WAL settings and at whether the
+statusline needs a write path at all — it currently calls `syncSessionStats`.
+
 ## Known: hook counters and transcript rules count different things
 
 `sessions.tool_calls` / `tool_fails` are incremented from hook events, which

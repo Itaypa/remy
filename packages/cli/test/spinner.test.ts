@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BRAND, HINTS, openDb, type TipRow } from "@ccpp/core";
@@ -29,6 +29,14 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "remy-spinner-"));
   settings = join(dir, "settings.json");
   process.env.REMY_SETTINGS_PATH = settings;
+  // REMY_DATA_DIR matters even though these tests pass an explicit DB path:
+  // writeOverride() calls logError() on malformed settings, and logError
+  // resolves dataDir() itself — so without this the suite appends its own
+  // stack traces to the developer's REAL ~/.remy/remy.log. It did, for a
+  // while: dozens of "[spinner] SyntaxError" lines from the deliberately
+  // malformed fixture below, sitting in a live log next to genuine errors.
+  process.env.REMY_DATA_DIR = dir;
+  process.env.REMY_HOME = dir;
   delete process.env.REMY_SPINNER;
   db = openDb(join(dir, "remy.db"));
 });
@@ -36,6 +44,8 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
   delete process.env.REMY_SETTINGS_PATH;
+  delete process.env.REMY_DATA_DIR;
+  delete process.env.REMY_HOME;
   delete process.env.REMY_SPINNER;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -127,6 +137,19 @@ describe("spinner tip override", () => {
     writeFileSync(settings, "{ not json ");
     expect(claimSpinnerTips(db, [TIP]).status).toBe("unreadable");
     expect(readFileSync(settings, "utf8")).toBe("{ not json ");
+  });
+
+  test("the error it logs goes to the test's data dir, not the developer's real one", () => {
+    // The test above deliberately triggers logError(). logError resolves
+    // dataDir() on its own rather than taking a path, so an unset
+    // REMY_DATA_DIR sends these stack traces into the live ~/.remy/remy.log —
+    // polluting real diagnostics with test noise, which is exactly how a real
+    // failure gets missed in the scroll.
+    writeFileSync(settings, "{ still not json ");
+    expect(claimSpinnerTips(db, [TIP]).status).toBe("unreadable");
+    const log = join(dir, "remy.log");
+    expect(existsSync(log)).toBe(true);
+    expect(readFileSync(log, "utf8")).toContain("[spinner]");
   });
 
   test("REMY_SPINNER=0 writes nothing at all", () => {
