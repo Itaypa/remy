@@ -1,0 +1,153 @@
+import { describe, expect, test } from "bun:test";
+import { TIPS, type SessionRow, type TipRow } from "@ccpp/core";
+import { renderReport, renderWeek, weekTotals } from "../src/ui";
+
+// /remy and /remy-week are the two surfaces a user deliberately opens, and
+// neither had any assertions — the end-to-end driver only checked that they
+// exit 0 and print something. These pin what the output actually says.
+
+const session = (o: Partial<SessionRow> = {}): SessionRow =>
+  ({
+    session_id: "abcdef1234567890", started_at: "2026-08-01T10:00:00.000Z", ended_at: null,
+    model: "claude-opus-5", cwd_hash: null, repo_hash: null, tokens_in: 12_000, tokens_out: 800,
+    cache_read: 0, cache_write: 0, cost_usd: null, tool_calls: 20, tool_fails: 0,
+    compacts_auto: 0, compacts_manual: 0, used_plan_mode: 0, max_context_pct: 42,
+    context_window: null, claude_md_bytes: null, perm_denials: 0, ...o,
+  }) as SessionRow;
+
+const tip = (o: Partial<TipRow> = {}): TipRow =>
+  ({
+    id: 1, tip_id: "edit-thrash", session_id: "s1", created_at: "2026-08-01T10:00:00.000Z",
+    status: "active", evidence: JSON.stringify({ files: 1, edits: 14 }),
+    est_savings_tokens: 55_000, why: null, ...o,
+  }) as TipRow;
+
+/** The report wraps long values across box-drawn continuation lines, so a
+ * naive toContain() on a sentence fails for reasons that have nothing to do
+ * with the behaviour under test. Strip the box and collapse whitespace. */
+const flat = (s: string) => s.replace(/│/g, " ").replace(/\s+/g, " ").trim();
+
+describe("renderReport", () => {
+  test("shows the session line, truncating the id to something readable", () => {
+    const out = renderReport({ session: session(), tips: [], active: null });
+    expect(out).toContain("abcdef12");
+    expect(out).not.toContain("abcdef1234567890");
+    expect(out).toContain("plan mode ✗ not used");
+    expect(renderReport({ session: session({ used_plan_mode: 1 }), tips: [], active: null })).toContain("✓ used");
+  });
+
+  test("suppresses rows that would always read zero", () => {
+    // The noise budget: a cache line with no cache, or "0 denied" on every
+    // report, is a permanent zero nobody can act on.
+    const quiet = renderReport({ session: session({ cache_read: 0, tokens_in: 0, perm_denials: 0 }), tips: [], active: null });
+    expect(quiet).not.toContain("💾 cache");
+    expect(quiet).not.toContain("denied");
+
+    const loud = renderReport({ session: session({ cache_read: 90_000, tokens_in: 10_000, perm_denials: 3 }), tips: [], active: null });
+    expect(loud).toContain("90% reused from cache");
+    expect(loud).toContain("3 denied");
+  });
+
+  test("lists only waste worth recovering, and says so plainly when there is none", () => {
+    const withWaste = renderReport({
+      session: session(),
+      tips: [tip({ est_savings_tokens: 55_000 }), tip({ id: 2, tip_id: "no-verify", est_savings_tokens: 0 })],
+      active: null,
+    });
+    expect(withWaste).toContain("Edit ping-pong on one file");
+    // The zero-value finding is filed but not shown — a "~0 🪙 recoverable"
+    // row is noise, not insight.
+    expect(withWaste).not.toContain("Edits shipped unverified");
+
+    const clean = renderReport({ session: session(), tips: [], active: null });
+    expect(clean).toContain("✨ none — clean session!");
+  });
+
+  test("the analyzer's own sentence replaces the generic explanation", () => {
+    const out = renderReport({
+      session: session(),
+      tips: [],
+      active: tip({ why: "you rewrote one file 14 times this week", evidence: JSON.stringify({ source: "adaptive" }) }),
+    });
+    expect(flat(out)).toContain("🤖 you rewrote one file 14 times this week");
+    // …and the templated version does not also appear.
+    expect(flat(out)).not.toContain("Same file edited");
+  });
+
+  test("an adaptive tip never leaks an unfilled placeholder into the report", () => {
+    // renderReport calls renderTemplate(def.fix) directly — it does NOT go
+    // through tipBody()'s title fallback. Today that is safe only because no
+    // tip's `fix` carries a placeholder and `what` is skipped whenever `why`
+    // is set. Both halves are pinned here and in the catalog test below,
+    // because the day someone adds {count} to a fix, every adaptive tip starts
+    // printing braces at the user.
+    for (const tip_id of Object.keys(TIPS)) {
+      const out = renderReport({
+        session: session(),
+        tips: [],
+        active: tip({ tip_id, why: "because the week says so", evidence: JSON.stringify({ source: "adaptive" }), est_savings_tokens: 0 }),
+      });
+      expect(out, `${tip_id} leaked a placeholder`).not.toMatch(/\{\w+\}/);
+    }
+  });
+
+  test("no tip's `fix` carries a placeholder — the report renders it without evidence", () => {
+    for (const [key, def] of Object.entries(TIPS)) {
+      expect(def.fix, `${key} fix has a placeholder; adaptive tips would print it raw`).not.toMatch(/\{\w+\}/);
+    }
+  });
+
+  test("the worth row appears only when there is something to recover", () => {
+    const worth = renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 55_000 }) });
+    expect(worth).toContain("back in your pocket");
+    const none = renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 0 }) });
+    expect(none).not.toContain("back in your pocket");
+  });
+
+  test("the adaptive footer reflects the actual state and offers the opposite toggle", () => {
+    const on = renderReport({ session: session(), tips: [], active: null, adaptive: { enabled: true, lastRunHours: 5 } });
+    expect(on).toContain("adaptive: on");
+    expect(on).toContain("last analyzed 5h ago");
+    expect(on).toContain("--off");
+
+    const off = renderReport({ session: session(), tips: [], active: null, adaptive: { enabled: false, lastRunHours: null } });
+    expect(off).toContain("adaptive: off");
+    expect(off).toContain("--on");
+    expect(off).not.toContain("last analyzed");
+  });
+});
+
+describe("renderWeek", () => {
+  const day = (d: string, tok: number, cost: number | null = null) =>
+    session({ started_at: `${d}T10:00:00.000Z`, tokens_in: tok, tokens_out: 0, cost_usd: cost });
+
+  test("one bar per day, oldest first, with the day's own totals", () => {
+    const rows = [day("2026-08-03", 300), day("2026-08-01", 100), day("2026-08-02", 200)];
+    const out = renderWeek({ rows, totals: weekTotals(rows), wasteTips: 0, wasteTokens: 0 });
+    const days = out.split("\n").filter((l) => /^│ \d\d-\d\d /.test(l)).map((l) => l.slice(2, 7));
+    expect(days).toEqual(["08-01", "08-02", "08-03"]);
+  });
+
+  test("sessions on the same day are merged into one bar", () => {
+    const rows = [day("2026-08-01", 100), day("2026-08-01", 400)];
+    const out = renderWeek({ rows, totals: weekTotals(rows), wasteTips: 0, wasteTokens: 0 });
+    expect(out.split("\n").filter((l) => l.startsWith("│ 08-01"))).toHaveLength(1);
+    expect(out).toContain("500");
+  });
+
+  test("an empty week says so instead of rendering an empty chart", () => {
+    const out = renderWeek({ rows: [], totals: weekTotals([]), wasteTips: 0, wasteTokens: 0 });
+    expect(out).toContain("no sessions recorded yet");
+    expect(out).toContain("0 sessions");
+  });
+
+  test("totals and the waste line report what they were given", () => {
+    const rows = [day("2026-08-01", 1_000, 2.5), day("2026-08-02", 3_000, 1.25)];
+    const out = renderWeek({ rows, totals: weekTotals(rows), wasteTips: 3, wasteTokens: 120_000 });
+    expect(out).toContain("4.0k 🪙");
+    expect(out).toContain("$3.75");
+    expect(out).toContain("2 sessions");
+    expect(out).toContain("waste caught: 3 tips");
+    expect(out).toContain("120k 🪙 recoverable");
+  });
+});
