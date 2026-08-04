@@ -57,6 +57,53 @@ describe("plugin launcher", () => {
     expect(out).toBe("");
   });
 
+  // Windows and anything exotic land here. The launcher must decline quietly:
+  // a hook that errors on an unsupported platform turns "no coaching" into
+  // "broken session", which is the thing this file exists to prevent.
+  //
+  // Two cases, one per axis, and that split is the point. Reporting BOTH the
+  // OS and the arch as unsupported tests neither arm: whichever check runs
+  // first exits, masking a broken second one. Each case below leaves the other
+  // axis valid so exactly one guard is under test.
+  //
+  // Exit code and silence alone also don't discriminate — a launcher that
+  // ignored the platform and carried on would exit 0 silently too, since no
+  // binary exists for the bogus target. So each case plants a binary at the
+  // target it WOULD fall through to. Correct behaviour never computes that
+  // name; the failure announces itself.
+  function shimUname(osOut: string, archOut: string): string {
+    const shimDir = join(home, "shim");
+    mkdirSync(shimDir, { recursive: true });
+    const uname = join(shimDir, "uname");
+    writeFileSync(uname, `#!/bin/sh\ncase "$1" in\n  -s) echo ${osOut} ;;\n  -m) echo ${archOut} ;;\n  *) echo ${osOut} ;;\nesac\n`);
+    chmodSync(uname, 0o755);
+    return `${shimDir}:${process.env.PATH ?? ""}`;
+  }
+
+  function plantTrap(target: string): void {
+    const trap = join(home, "bin", `remy-9.9.9-${target}`);
+    writeFileSync(trap, '#!/bin/sh\necho "SHOULD NOT HAVE RUN"\n');
+    chmodSync(trap, 0o755);
+  }
+
+  test("an unsupported OS exits 0 without running anything", async () => {
+    const PATH = shimUname("Windows_NT", "arm64"); // arch is fine; only the OS is not
+    plantTrap("linux-arm64");
+    const { code, out } = await run({ PATH });
+    expect(code).toBe(0);
+    expect(out).toBe("");
+    expect(await Bun.file(join(home, "bin", "current")).exists()).toBe(false);
+  });
+
+  test("an unsupported architecture exits 0 without running anything", async () => {
+    const PATH = shimUname("Darwin", "ia64"); // OS is fine; only the arch is not
+    plantTrap("darwin-x64");
+    const { code, out } = await run({ PATH });
+    expect(code).toBe(0);
+    expect(out).toBe("");
+    expect(await Bun.file(join(home, "bin", "current")).exists()).toBe(false);
+  });
+
   test("is valid POSIX sh", async () => {
     const proc = Bun.spawn(["sh", "-n", LAUNCHER], { stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(0);

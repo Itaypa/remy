@@ -125,4 +125,31 @@ describe("adaptive coach — the controls over the one outbound path", () => {
     const out = await remy(["adapt"], { REMY_ADAPT_CMD: "sh -c exit1-does-not-exist" });
     expect(out).toContain("unavailable");
   });
+
+  test("the SessionEnd hook returns immediately even when the analysis is slow", async () => {
+    // The contract from CLAUDE.md: the analysis is out-of-band and a hook
+    // never waits on it. Assert the observable property rather than the
+    // mechanism — whether that is process.exit, an unref'd child, or
+    // something else later, what must stay true is that a slow backend cannot
+    // stall the host's session teardown.
+    seedSessions(5);
+    const slow = join(dataDir, "slow.sh");
+    writeFileSync(slow, `#!/bin/sh\nsleep 30\n`);
+    chmodSync(slow, 0o755);
+
+    const payload = JSON.stringify({ hook_event_name: "SessionEnd", session_id: "s0", cwd: dataDir });
+    const started = performance.now();
+    const proc = Bun.spawn(["bun", CLI_ENTRY, "ingest"], {
+      env: env({ REMY_ADAPT_CMD: `sh ${slow}` }),
+      stdin: new TextEncoder().encode(payload),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const code = await proc.exited;
+    const elapsedMs = performance.now() - started;
+
+    expect(code).toBe(0);
+    // Generous ceiling: the point is "does not wait 30s", not a latency budget.
+    expect(elapsedMs).toBeLessThan(10_000);
+  }, 40_000);
 });
