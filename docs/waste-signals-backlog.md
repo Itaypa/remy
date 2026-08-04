@@ -23,7 +23,7 @@ metadata-only.
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Would unlock a cross-session verify-habit rule | Measured before building; the enum is content-free but the `events` table is the wrong store — see below | — (infrastructure) | **deferred** — no consumer, wrong store |
 | S11 | **Auto-mode denials** — calls the host's classifier refused | A denied call is a full round trip that buys nothing and usually gets re-issued | **`PermissionDenied`** hook registered; counted into local-only `sessions.perm_denials`. **Collection only — this is NOT S9's population** (see the note below) | — (no tip yet) | **collecting** — needs data before a threshold |
 | S9 | **Permission-prompt churn** (taxonomy M13) | Every approval prompt is an interruption, and a denied call is a full round trip that usually gets re-issued — the fix is a one-line allowlist entry the user never makes because nobody counts the prompts | Register the **`PermissionRequest`** hook (it exists now — see the hook-surface note below) and count events per session, bucketed by the tool name we already whitelist. Nothing new is stored beyond a count and an existing enum | new tip `allowlist-the-routine` | **backlog** — needs collection before a threshold |
-| S10 | **Attribute subagent tool calls** (accuracy fix, not a tip) | `sessions.tool_calls`/`tool_fails` count delegated work that main-chain rules never see; on one local session 98 of 331 Bash calls were the agent's own. Two numbers in the same UI count different populations | **`SubagentStart`/`SubagentStop`** carry `agent_id`, so the subagent's calls can be bracketed and either excluded or counted separately. Verify first whether `PostToolUse` itself carries `agent_id` — if it does, this is a one-line filter instead | — (infrastructure) | **backlog** — verify the payload first |
+| S10 | **Attribute subagent tool calls** (accuracy fix, not a tip) | `sessions.tool_calls`/`tool_fails` count delegated work that main-chain rules never see; on one local session 98 of 331 Bash calls were the agent's own. Two numbers in the same UI count different populations | **Verified: `PostToolUse` carries `agent_id` directly** (see the note below), so this is a one-line filter, not a bracketing scheme | — (infrastructure) | **ready** — needs a call on the displayed numbers |
 
 ## The hook surface has grown — re-check "not detectable" before trusting it
 
@@ -130,6 +130,34 @@ group — real identity is `git rev-parse --git-common-dir`, which a filesystem
 walk can't reproduce); a `git init` in `$HOME` silently stamps one id onto every
 otherwise-unrelated session; and a symlinked cwd (`/var` vs `/private/var` on
 macOS) yields two ids for one repo.
+
+## S10 is unblocked: `agent_id` is on every hook fired inside a subagent
+
+The open question was whether the subagent's calls could be told apart without
+bracketing `SubagentStart`/`SubagentStop`. They can. The host's own hook-input
+schema (Claude Code 2.1.220) describes `agent_id` as:
+
+> "Present only when the hook fires from within a subagent (e.g., a tool called
+> by an AgentTool worker). Absent for the main thread, even in `--agent`
+> sessions. **Use this field (not `agent_type`) to distinguish subagent calls
+> from main-thread calls.**"
+
+So `PostToolUse` carries it, `agent_type` is explicitly the wrong field for
+this, and the whole fix is `const isSubagent = typeof payload.agent_id === "string"`.
+`agent_id` must **not** be stored — it is an opaque id we have no use for; only
+the boolean matters, and even that only as a counter.
+
+**Why this isn't already done.** It changes numbers the user already reads:
+`/remy`'s "🧰 tools N calls · N failed" and the adaptive payload's
+`tool_fail_rate` would both drop on subagent-heavy sessions. There are two
+defensible designs — stop counting delegated work in `tool_calls`, or keep the
+total and add a separate `subagent_tool_calls` — and picking one is a product
+call about what the report means, not a bug fix. Left for an awake decision.
+
+Worth knowing when deciding: the rules already disagree with the report.
+`plan-mode`, `subagent-offload` and `reread-churn` read main-chain-only
+transcript data, so today the report's totals and the tips beside them are
+counting different populations.
 
 ## Known: hook counters and transcript rules count different things
 

@@ -13,6 +13,7 @@ Common fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name`.
 |---|---|---|
 | `SessionStart` | `source` (`startup`/`resume`/`clear`/`compact`) | upsert session; on `startup` emit the splash via `systemMessage` JSON output (shown to the user, never added to model context) |
 | `PostToolUse` | `tool_name`, `tool_input` (hashed target only) | record tool event, bump counters. **Fires only when a tool call succeeds** |
+| — | `agent_id` rides on **every** hook fired from inside a subagent (a tool called by an AgentTool worker) and is absent on the main thread. It is the host's stated way to tell delegated calls from your own — see S10 in the backlog. We do not read it yet, which is why the counters include the agent's own work | |
 | `PostToolUseFailure` | same | the failure half — without it `tool_fails` is structurally always 0 |
 | `PermissionDenied` | — (payload deliberately unread) | bump `sessions.perm_denials`, print nothing |
 | `PreCompact` | `trigger` (`auto`/`manual`) | record compact; `auto` immediately files an auto-compact finding |
