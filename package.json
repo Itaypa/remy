@@ -9,7 +9,8 @@
     "build": "bun scripts/build-plugin.ts",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
-    "preflight": "bun scripts/preflight.ts"
+    "preflight": "bun scripts/preflight.ts",
+    "mutate": "bun scripts/mutation.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.23",

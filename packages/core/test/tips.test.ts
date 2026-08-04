@@ -28,6 +28,26 @@ describe("tip engine", () => {
     expect(sessionTips(db, "s1")).toHaveLength(2);
   });
 
+  test("a later, bigger finding queues behind the active tip instead of taking its place", () => {
+    // The noise budget is one active tip at a time, and "at a time" means the
+    // line does not change under the user mid-session. The test above records
+    // everything in one call, so promotion never runs while a tip is already
+    // active — which is exactly the case that decides this. Without the guard,
+    // a bigger finding arriving later promotes itself and the session ends up
+    // with two active rows.
+    const db = openDb(":memory:");
+    recordFindings(db, "s1", [f("reread-churn", 5_000)], NOW);
+    expect(activeTip(db)!.tip_id).toBe("reread-churn");
+
+    recordFindings(db, "s2", [f("auto-compact", 60_000)], NOW);
+    expect(activeTip(db)!.tip_id).toBe("reread-churn");
+
+    const active = (db as Database).query(`SELECT tip_id FROM tips WHERE status = 'active'`).all();
+    expect(active).toHaveLength(1);
+    // The bigger one is not lost — it is waiting its turn.
+    expect(openTips(db).map((t) => t.tip_id)).toContain("auto-compact");
+  });
+
   test("re-analysis is idempotent and keeps the max estimate", () => {
     const db = openDb(":memory:");
     recordFindings(db, "s1", [f("auto-compact", 60_000)], NOW);

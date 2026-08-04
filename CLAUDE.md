@@ -65,7 +65,8 @@ packages/
   plugin-claude-code/         # first host adapter: plugin manifest, hooks, /remy commands,
                               #   bin/remy (the committed launcher — see Shipping below),
                               #   art/rat.txt (the source art)
-scripts/                      # build-plugin.ts (compile) · preflight.ts (release gate)
+scripts/                      # build-plugin.ts (compile) · preflight.ts (release gate) ·
+                              #   mutation.ts (mutation-testing harness, run by hand)
 docs/                         # design-language.md · claude-code-surfaces.md ·
                               #   mistake-taxonomy.md · waste-signals-backlog.md
 ```
@@ -96,7 +97,11 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   (XP/levels/streaks/achievements) — deliberately removed as redundant; the coaching
   signal is the tip itself.
 - Dev commands: `bun install` · `bun test` · `bun run typecheck` · `bun run build`
-  (plugin binary) · `bun run preflight` (release gate).
+  (plugin binary) · `bun run preflight` (release gate) · `bun run mutate`
+  (mutation testing — breaks one invariant at a time in a throwaway worktree at
+  HEAD and fails if the suite doesn't notice; deliberately not part of preflight,
+  since a surviving mutation is a code-health signal, not a reason to block a
+  release). Note it runs against **HEAD**, so uncommitted work isn't under test.
 - Claude Code surfaces used by the adapter: hooks (`SessionStart`, `PostToolUse`,
   `PreCompact`, `Stop`, `SessionEnd`), statusline command (constant single-layout HUD;
   `refreshInterval` keeps it fresh between host repaints), plugin commands, and
