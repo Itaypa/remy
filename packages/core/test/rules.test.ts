@@ -88,6 +88,13 @@ describe("waste signatures", () => {
 
     const short = analyzeSession(snapshot({ toolCalls: manyCalls.slice(0, 10), editCalls: 6 }));
     expect(short.some((f) => f.tipId === "plan-mode")).toBe(false);
+
+    // A solidly-sized session that is still under the "big enough to have
+    // wanted a plan" floor. 10 calls was too far below 25 to pin it; 20 is
+    // just under, so dropping the floor breaks this instead of quietly
+    // telling people they should have planned a medium-sized session.
+    const medium = analyzeSession(snapshot({ toolCalls: manyCalls.slice(0, 20), editCalls: 6 }));
+    expect(medium.some((f) => f.tipId === "plan-mode")).toBe(false);
   });
 
   test("retry-loop needs 3+ consecutive failures of the same call", () => {
@@ -156,6 +163,12 @@ describe("waste signatures", () => {
       // scolds its own authors for documenting their project.
       const findings = analyzeSession(snapshot({ claudeMdBytes: 8_920 }));
       expect(findings.some((f) => f.tipId === "claude-md-prune")).toBe(false);
+
+      // And a genuinely long-but-not-bloated file, just under the floor. 9k
+      // sat far enough below 20k that halving the threshold broke nothing —
+      // so the number wasn't actually pinned by the suite, only stated.
+      const justUnder = analyzeSession(snapshot({ claudeMdBytes: 19_500 }));
+      expect(justUnder.some((f) => f.tipId === "claude-md-prune")).toBe(false);
     });
 
     test("a bloated CLAUDE.md fires with its size in KB and the tokens a prune returns", () => {
@@ -202,6 +215,16 @@ describe("waste signatures", () => {
       ...Array.from({ length: 6 }, () => call("Edit", true, hash)),
     ];
     expect(analyzeSession(snapshot({ toolCalls: readFirst })).some((x) => x.tipId === "edit-thrash")).toBe(false);
+
+    // Enough edits, one re-read short of the cycle floor: two corrections is
+    // normal work, three is the ping-pong. Pins EDIT_THRASH_MIN_CYCLES — the
+    // edit count alone was pinned, this half of the AND was not.
+    const twoCycles: ToolCall[] = [
+      ...Array.from({ length: 4 }, () => call("Edit", true, hash)),
+      call("Read", true, hash), call("Edit", true, hash),
+      call("Read", true, hash), call("Edit", true, hash),
+    ];
+    expect(analyzeSession(snapshot({ toolCalls: twoCycles })).some((x) => x.tipId === "edit-thrash")).toBe(false);
   });
 
   test("no-verify fires on edits with shell used but no test/build/lint run", () => {
@@ -314,6 +337,12 @@ describe("waste signatures", () => {
 
     const narrow = analyzeSession(snapshot({ toolCalls: wideReads.slice(0, 14), contextPct: 70 }));
     expect(narrow.some((x) => x.tipId === "subagent-offload")).toBe(false);
+
+    // Busy but not yet under pressure. 30% was too far below the line to pin
+    // it — this sits just under, so lowering the gate to 50% breaks the test
+    // instead of silently widening who gets scolded for reading a lot.
+    const belowPressure = analyzeSession(snapshot({ toolCalls: wideReads, contextPct: 60 }));
+    expect(belowPressure.some((x) => x.tipId === "subagent-offload")).toBe(false);
   });
 
   test("clean session yields no findings, results sorted by savings", () => {
