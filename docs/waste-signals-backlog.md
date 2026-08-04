@@ -19,7 +19,7 @@ metadata-only.
 | S4 | **CLAUDE.md missing / bloated** (taxonomy 2c) | Missing: agent re-derives project facts every session (Anthropic's #1 best practice). Bloated: competes with the task for attention, taxes every session | `stat()` (never a read) the memory family the host would actually load — cwd walked up through its parents, plus `~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` — summed into a **local-only** `sessions.claude_md_bytes` column. Resolving cwd alone was rejected: it reports "no CLAUDE.md" to anyone running from a subdirectory (this repo included). NULL ≠ 0 (never probed vs genuinely absent). Missing fires only alongside `reread-churn` and **replaces** it; bloat is measured in bytes (≥20k), not lines — bytes/line is too unstable to convert — and yields to `context-tax`, whose fix already says to prune | new tip `claude-md-missing`; `claude-md-prune` (was a wisdom tip, now rule-backed) | **shipped** |
 | S5 | **Whole-file rewrite churn** — repeated `Write` to the same existing file instead of targeted `Edit` | Regenerating a whole file pays full output price for every unchanged line; Anthropic: surgical edits | ≥3 `Write` calls to the same target-hash in one session | ~~`surgical-edits`~~ | **dropped** — measured, see below |
 | S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** — unblocked, needs calibration data (see note) |
-| S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | `clear-between-tasks` (exists as wisdom tip → gains a real rule) | **backlog** |
+| S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | ~~`clear-between-tasks`~~ (stays a wisdom tip) | **dropped** — measured, see below |
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Unlocks cross-session verify-habit rules and admin hygiene aggregates | Persist the existing closed `classifyCommand` enum onto `tool_use` events; closed enum → structurally content-free. Breaking design change: must update `privacy.test.ts` + server `ingest-privacy` suite | — (infrastructure) | **backlog** |
 
 ## S6 is unblocked but not yet calibratable
@@ -37,6 +37,44 @@ days of real sessions, measure the actual distribution the way S5 was measured,
 reputation for crying wolf.
 
 ## Dropped after measurement
+
+- **S7 — marathon session.** Measured against 47 local sessions (39 with ≥2
+  events) and their real transcripts before building:
+  - **Its firing set is a strict subset of `cache-idle`'s.** Only 7 of 39
+    sessions contain any gap >30 min — the entire universe S7 can draw from.
+    Six clear the ≥4h span, and all six already fire `cache-idle`. The seventh
+    (2.1h span, one 42-min gap) fires neither. S7 flags **zero** sessions the
+    coach isn't already speaking to.
+  - **That overlap is structural, not an artifact of this corpus.** S7's burst
+    boundary and `CACHE_EXPIRY_MIN_GAP_MS` are the same 30 minutes, so both are
+    subsets of "session has a ≥30 min idle gap". The only sessions S7 could own
+    alone are those whose resumed context fell under the 100k re-write floor —
+    exactly the cases where leaving the session open cost nothing.
+  - **Span measures interruption, not topic change.** The gaps producing the
+    "bursts" run 438–4,229 minutes: overnight and multi-day. Two of the six are
+    a work block, an overnight gap, then a handful of events — one of them a
+    single event. For that developer "/clear between unrelated tasks" isn't a
+    weaker tip than `cache-idle`, it's a **wrong** one, and it would re-serve
+    under a new id advice they may have already dismissed as `cache-idle`.
+  - **The topic-proxy alternative was built and tested, and is worse.** Per-burst
+    sets of `target_hash` restricted to file-shaped tools, with disjoint
+    consecutive bursts as the topic-change signal: across 22 bursts, 5 have zero
+    file targets and 9 have ≤2, so half the boundaries can't be judged at all.
+    It fires on 2 sessions — both on sets of 1–4 files, where disjointness is a
+    coin flip — and stays **silent** on the 157-hour, 7-burst session whose
+    bursts overlap by 7–14 files each. `target_hash` can't support it anyway: it
+    hashes `file_path ?? notebook_path ?? path ?? command ?? url`, so all 640
+    Bash events carry a command hash indistinguishable from a file hash, and
+    ~600 tool_use events (MCP, Task*, Agent, WebSearch) carry none. `cwd_hash`
+    is no fallback — 1 of 47 sessions has more than one.
+
+  What would revive it: a genuine topic proxy that isn't elapsed time — a cheap,
+  content-free marker that the user *started something new*. Until such a signal
+  exists, M1 stays `partial` and the idle-gap half of the story belongs to
+  `cache-idle` (M19), which already measures it in tokens.
+
+  Side finding worth chasing separately: `repo_hash` is populated on **0** events
+  in the whole DB — a dead column.
 
 - **S5 — whole-file rewrite churn.** Measured against 50 real local transcripts
   (7,285 assistant entries, 277 `Write` calls) before building, and the numbers
