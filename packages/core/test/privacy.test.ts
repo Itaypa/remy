@@ -61,6 +61,31 @@ describe("privacy gate", () => {
     expect(sanitizeEvent({ ...base, ts: "2026-07-26T10:00:00.123Z" })).not.toBeNull();
   });
 
+  test("repo_hash is no longer whitelisted — it is stripped like any unknown key", () => {
+    // It was in the schema but no caller ever set it: NULL for all 2,372
+    // events and all 59 sessions in the real local DB. A field that always
+    // reads null is a trap (a rule built on it can never fire), and the
+    // whitelist should not carry surface nothing writes. The DB columns stay
+    // for shape compatibility; the parse gate does not.
+    const ev = sanitizeEvent({
+      session_id: "s1",
+      ts: "2026-07-26T10:00:00Z",
+      type: "session_start",
+      repo_hash: hashPath("/Users/x/project"),
+    });
+    expect(ev).not.toBeNull();
+    expect(ev).not.toHaveProperty("repo_hash");
+
+    // And it stays stripped when the value is hostile rather than well-formed.
+    const hostile = sanitizeEvent({
+      session_id: "s1",
+      ts: "2026-07-26T10:00:00Z",
+      type: "session_start",
+      repo_hash: `/Users/x/${MARKER}`,
+    });
+    expect(JSON.stringify(hostile)).not.toContain(MARKER);
+  });
+
   test("hashPath is 16 lowercase hex chars and one-way", () => {
     const h = hashPath("/Users/x/secret.ts");
     expect(h).toMatch(/^[0-9a-f]{16}$/);

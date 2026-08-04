@@ -54,7 +54,9 @@ export const SessionEventSchema = z.object({
     })
     .optional(),
   compact_trigger: z.enum(["auto", "manual"]).optional(),
-  repo_hash: Hash16.optional(),
+  // No repo_hash: it was whitelisted here but no caller ever set it (0 of
+  // 2,372 local events). Narrowing the whitelist is always safe; see the
+  // vestigial-column note in store.ts for why the DB columns stay.
   cwd_hash: Hash16.optional(),
 });
 export type SessionEvent = z.infer<typeof SessionEventSchema>;

@@ -64,6 +64,9 @@ function migrate(db: Database): void {
     context_pct REAL,
     tool_name TEXT, tool_ok INTEGER, target_hash TEXT,
     compact_trigger TEXT,
+    -- repo_hash is vestigial: never written, NULL in every row. The column
+    -- stays because this is CREATE TABLE IF NOT EXISTS, so removing it would
+    -- only affect fresh databases and make the two shapes diverge.
     repo_hash TEXT, cwd_hash TEXT
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)`);
@@ -169,7 +172,6 @@ export interface EventRow {
   tool_ok: number | null;
   target_hash: string | null;
   compact_trigger: string | null;
-  repo_hash: string | null;
   cwd_hash: string | null;
 }
 
@@ -179,6 +181,13 @@ export interface SessionRow {
   ended_at: string | null;
   model: string | null;
   cwd_hash: string | null;
+  /** VESTIGIAL — nothing has ever written this, and nothing does now: it is
+   * NULL for every row in every existing database. Kept only because the DDL
+   * uses CREATE TABLE IF NOT EXISTS, so dropping the column would leave live
+   * DBs and fresh DBs with different shapes. Do not build a rule on it without
+   * wiring a writer first, and read the measurement in the backlog before
+   * assuming a git-root hash is the grouping key you want — on the only real
+   * corpus it duplicates cwd_hash or is null, and it splits worktrees apart. */
   repo_hash: string | null;
   tokens_in: number;
   tokens_out: number;
@@ -213,8 +222,8 @@ export function insertEvent(db: Database, ev: SessionEvent): void {
   db.query(
     `INSERT INTO events (session_id, ts, host, host_version, type, model,
       tokens_in, tokens_out, cache_read, cache_write, context_pct,
-      tool_name, tool_ok, target_hash, compact_trigger, repo_hash, cwd_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      tool_name, tool_ok, target_hash, compact_trigger, cwd_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     ev.session_id,
     ev.ts,
@@ -231,23 +240,21 @@ export function insertEvent(db: Database, ev: SessionEvent): void {
     ev.tool ? (ev.tool.ok ? 1 : 0) : null,
     ev.tool?.target_hash ?? null,
     ev.compact_trigger ?? null,
-    ev.repo_hash ?? null,
     ev.cwd_hash ?? null,
   );
 }
 
 export function upsertSession(
   db: Database,
-  s: { session_id: string; ts: string; model?: string; cwd_hash?: string; repo_hash?: string },
+  s: { session_id: string; ts: string; model?: string; cwd_hash?: string },
 ): void {
   db.query(
-    `INSERT INTO sessions (session_id, started_at, model, cwd_hash, repo_hash)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO sessions (session_id, started_at, model, cwd_hash)
+     VALUES (?, ?, ?, ?)
      ON CONFLICT(session_id) DO UPDATE SET
        model = COALESCE(excluded.model, sessions.model),
-       cwd_hash = COALESCE(excluded.cwd_hash, sessions.cwd_hash),
-       repo_hash = COALESCE(excluded.repo_hash, sessions.repo_hash)`,
-  ).run(s.session_id, s.ts, s.model ?? null, s.cwd_hash ?? null, s.repo_hash ?? null);
+       cwd_hash = COALESCE(excluded.cwd_hash, sessions.cwd_hash)`,
+  ).run(s.session_id, s.ts, s.model ?? null, s.cwd_hash ?? null);
 }
 
 /** Record the CLAUDE.md byte count for a session. Coerces to a whole number

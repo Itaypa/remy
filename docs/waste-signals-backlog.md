@@ -61,6 +61,36 @@ metadata-only.
   trail, `SessionEventSchema` untouched. Ship it with its rule, the way every
   other session column landed.
 
+## Resolved: `repo_hash` was dead, and wiring it would have made it wrong
+
+`repo_hash` was whitelisted in `SessionEventSchema` and plumbed through
+`insertEvent` and `upsertSession`, but no caller ever passed it: NULL for all
+2,372 events and all 59 sessions. It has been **removed from the schema and the
+writers**; the two DB columns stay (the DDL is `CREATE TABLE IF NOT EXISTS`, so
+dropping them would only change fresh databases and make the shapes diverge)
+and are annotated as vestigial in `store.ts`.
+
+The tempting fix — resolve the git root by walking up for `.git` and store its
+hash — was measured first and rejected. Session cwds in the real DB:
+
+| cwd | sessions | what a git-root hash would give |
+|-----|----------|----------------------------------|
+| the repo root | 36 | identical to `cwd_hash` |
+| `$HOME` | 20 | null (no repo above it) |
+| 3 others | 1 each | — |
+
+**Zero sessions started from a subdirectory**, so the stated benefit (grouping
+`packages/*` sessions with the root) has no instances: the column would be a
+verbatim copy of `cwd_hash` where it resolved and null where it didn't. Claude
+Code's cwd is wherever the agent was launched, and it gets launched at the root.
+
+Three further ways a `.git` walk is the wrong identity, if this is revisited:
+worktrees terminate the walk at the worktree (so it *splits* what it claims to
+group — real identity is `git rev-parse --git-common-dir`, which a filesystem
+walk can't reproduce); a `git init` in `$HOME` silently stamps one id onto every
+otherwise-unrelated session; and a symlinked cwd (`/var` vs `/private/var` on
+macOS) yields two ids for one repo.
+
 ## Known: hook counters and transcript rules count different things
 
 `sessions.tool_calls` / `tool_fails` are incremented from hook events, which
@@ -124,8 +154,8 @@ reputation for crying wolf.
   exists, M1 stays `partial` and the idle-gap half of the story belongs to
   `cache-idle` (M19), which already measures it in tokens.
 
-  Side finding worth chasing separately: `repo_hash` is populated on **0** events
-  in the whole DB — a dead column.
+  Side finding, since chased and resolved: `repo_hash` was populated on **0**
+  events — see the note below.
 
 - **S5 — whole-file rewrite churn.** Measured against 50 real local transcripts
   (7,285 assistant entries, 277 `Write` calls) before building, and the numbers
