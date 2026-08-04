@@ -22,6 +22,30 @@ describe("tipLine — [Brand]: emoji problem → solution → value", () => {
     expect(line.startsWith(`[${BRAND}]: `)).toBe(true);
   });
 
+  test("a tip with no session evidence never renders literal {braces}", () => {
+    // The adaptive analyzer queues tips with evidence {source:"adaptive"} and
+    // is free to pick a rule-backed id, so a template written around {edits}
+    // meets a row that has none. Falling back to the title keeps the surface
+    // readable; leaking braces onto the statusline is the bug this guards.
+    const line = tipLine(tipRow({ evidence: JSON.stringify({ source: "adaptive" }) }));
+    expect(line).not.toMatch(/\{\w+\}/);
+    expect(line).toContain("Edit ping-pong on one file");
+  });
+
+  test("evidence-free rendering still keeps the value clause", () => {
+    const line = tipLine(
+      tipRow({ evidence: JSON.stringify({ source: "adaptive" }), est_savings_tokens: 12_000 }),
+    );
+    expect(line).not.toMatch(/\{\w+\}/);
+    expect(line).toContain(" → +12k 🪙");
+  });
+
+  test("a template whose evidence IS present is untouched by the fallback", () => {
+    const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }) }));
+    expect(line).toContain("36×");
+    expect(line).not.toContain("Edit ping-pong on one file");
+  });
+
   test("a quantified finding gets a trailing value clause", () => {
     const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }), est_savings_tokens: 165_000 }));
     expect(line).toContain(" → +165k 🪙");

@@ -112,8 +112,21 @@ function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
     // evidence is display-only
   }
   const value = tip.est_savings_tokens > 0 ? ` → +${fmtTok(tip.est_savings_tokens)} 🪙` : "";
-  return `${renderTemplate(template, evidence)}${value}`;
+  const rendered = renderTemplate(template, evidence);
+  // Not every tip row carries the evidence its template asks for: the adaptive
+  // analyzer files tips with evidence {source:"adaptive"} and no session
+  // numbers at all (adapt.ts), and it may pick any catalog id, including a
+  // rule-backed one whose `short` is written around {edits}/{count}/{files}.
+  // renderTemplate passes unknown keys through verbatim — correct, since
+  // inventing a number would be worse — so without this the statusline reads
+  // "Same file edited {edits}×". The title says the same thing with no
+  // evidence in it, which is exactly the right thing to say when we have none.
+  const body = UNRESOLVED_PLACEHOLDER.test(rendered) ? def.title : rendered;
+  return `${body}${value}`;
 }
+
+/** Non-global on purpose: a /g regex carries lastIndex between .test() calls. */
+const UNRESOLVED_PLACEHOLDER = /\{\w+\}/;
 
 /** "[🐭REMY]: 🔨 Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙"
  * — one format for every tip surface: the statusline, the session-start

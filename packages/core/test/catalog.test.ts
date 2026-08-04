@@ -42,6 +42,16 @@ describe("tip catalog", () => {
     }
   });
 
+  test("no title carries a placeholder — it is the render-time fallback", () => {
+    // tipBody() in cli/src/ui.ts falls back to the title when a tip's evidence
+    // can't fill its template (the adaptive analyzer files rule-backed tips
+    // with no session numbers). A title with its own {placeholder} would leak
+    // exactly the braces that fallback exists to prevent.
+    for (const [key, def] of Object.entries(TIPS)) {
+      expect(def.title, `${key} title carries a placeholder`).not.toMatch(/\{\w+\}/);
+    }
+  });
+
   test("every tip carries a well-formed https docs link (the click-through target)", () => {
     for (const [key, def] of Object.entries(TIPS)) {
       expect(def.docs, `missing docs url for ${key}`).toMatch(/^https:\/\/[^\s"\\]+$/);
