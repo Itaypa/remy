@@ -21,6 +21,35 @@ metadata-only.
 | S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** — unblocked, needs calibration data (see note) |
 | S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | ~~`clear-between-tasks`~~ (stays a wisdom tip) | **dropped** — measured, see below |
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Would unlock a cross-session verify-habit rule | Measured before building; the enum is content-free but the `events` table is the wrong store — see below | — (infrastructure) | **deferred** — no consumer, wrong store |
+| S9 | **Permission-prompt churn** (taxonomy M13) | Every approval prompt is an interruption, and a denied call is a full round trip that usually gets re-issued — the fix is a one-line allowlist entry the user never makes because nobody counts the prompts | Register the **`PermissionRequest`** hook (it exists now — see the hook-surface note below) and count events per session, bucketed by the tool name we already whitelist. Nothing new is stored beyond a count and an existing enum | new tip `allowlist-the-routine` | **backlog** — needs collection before a threshold |
+| S10 | **Attribute subagent tool calls** (accuracy fix, not a tip) | `sessions.tool_calls`/`tool_fails` count delegated work that main-chain rules never see; on one local session 98 of 331 Bash calls were the agent's own. Two numbers in the same UI count different populations | **`SubagentStart`/`SubagentStop`** carry `agent_id`, so the subagent's calls can be bracketed and either excluded or counted separately. Verify first whether `PostToolUse` itself carries `agent_id` — if it does, this is a one-line filter instead | — (infrastructure) | **backlog** — verify the payload first |
+
+## The hook surface has grown — re-check "not detectable" before trusting it
+
+Several taxonomy verdicts were written against an older Claude Code hook
+surface and are now simply out of date. The current surface documents **31**
+hook events, including a batch this project has never looked at:
+
+- **`PermissionRequest`** (fires when a tool call needs a permission decision,
+  matcher on tool name) and **`PermissionDenied`** (fires after a denial).
+  M13's "permission events are not exposed to hooks today" is **false as of
+  now** — that's S9.
+- **`SubagentStart` / `SubagentStop`**, carrying `agent_id` and `agent_type` —
+  the missing piece for attributing delegated tool calls (S10).
+- **`PostToolUseFailure`**, which is why `tool_fails` had been 0 forever
+  (fixed) — the same class of stale assumption, caught the same way.
+- `permission_mode` is a **standard field on every hook payload**, so the
+  permission posture of a session is already arriving at our door on hooks we
+  are registered for today.
+- `UserPromptSubmit` exists and carries `user_input` — the prompt text. That
+  is exactly what the privacy invariant forbids storing, so batch-2b stays
+  cadence-only (an event type, no payload), and M5 stays not-planned on
+  false-positive grounds rather than on availability grounds.
+
+**Process note:** a "not detectable" row is a claim about a moving target. Two
+of tonight's findings (`PostToolUseFailure`, the permission events) were stale
+verdicts rather than hard limits. Re-check this list against the hooks doc
+before concluding anything is impossible.
 
 ## Deferred — enablers without a consumer
 
