@@ -23,7 +23,7 @@ metadata-only.
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Would unlock a cross-session verify-habit rule | Measured before building; the enum is content-free but the `events` table is the wrong store — see below | — (infrastructure) | **deferred** — no consumer, wrong store |
 | S11 | **Auto-mode denials** — calls the host's classifier refused | A denied call is a full round trip that buys nothing and usually gets re-issued | **`PermissionDenied`** hook registered; counted into local-only `sessions.perm_denials`. **Collection only — this is NOT S9's population** (see the note below) | — (no tip yet) | **collecting** — needs data before a threshold |
 | S9 | **Permission-prompt churn** (taxonomy M13) | Every approval prompt is an interruption, and a denied call is a full round trip that usually gets re-issued — the fix is a one-line allowlist entry the user never makes because nobody counts the prompts | Register the **`PermissionRequest`** hook (it exists now — see the hook-surface note below) and count events per session, bucketed by the tool name we already whitelist. Nothing new is stored beyond a count and an existing enum | new tip `allowlist-the-routine` | **backlog** — needs collection before a threshold |
-| S10 | **Attribute subagent tool calls** (accuracy fix, not a tip) | `sessions.tool_calls`/`tool_fails` count delegated work that main-chain rules never see; on one local session 98 of 331 Bash calls were the agent's own. Two numbers in the same UI count different populations | **Verified: `PostToolUse` carries `agent_id` directly** (see the note below), so this is a one-line filter, not a bracketing scheme | — (infrastructure) | **ready** — needs a call on the displayed numbers |
+| S10 | **Attribute subagent tool calls** (accuracy fix, not a tip) | `sessions.tool_calls`/`tool_fails` count delegated work that main-chain rules never see; on one local session 98 of 331 Bash calls were the agent's own. Two numbers in the same UI count different populations | Per the host's own hook-input schema, `agent_id` rides on any hook fired inside a subagent (see the note below), so this should be a one-line filter rather than a bracketing scheme — read from the schema, not yet observed on a live payload | — (infrastructure) | **ready** — needs a call on the displayed numbers |
 
 ## The hook surface has grown — re-check "not detectable" before trusting it
 
@@ -142,10 +142,18 @@ schema (Claude Code 2.1.220) describes `agent_id` as:
 > sessions. **Use this field (not `agent_type`) to distinguish subagent calls
 > from main-thread calls.**"
 
-So `PostToolUse` carries it, `agent_type` is explicitly the wrong field for
-this, and the whole fix is `const isSubagent = typeof payload.agent_id === "string"`.
-`agent_id` must **not** be stored — it is an opaque id we have no use for; only
-the boolean matters, and even that only as a counter.
+"a tool called by an AgentTool worker" is a `PostToolUse`, so the field should
+be there, `agent_type` is explicitly the wrong one to use, and the whole fix is
+`const isSubagent = typeof payload.agent_id === "string"`. `agent_id` must
+**not** be stored — it is an opaque id we have no use for; only the boolean
+matters, and even that only as a counter.
+
+**Confidence, stated precisely:** this is read from the host's schema, not
+observed on a live payload. That is a strong source but it is not the same
+thing, and conflating the two is exactly what produced the retracted PreCompact
+claim below. Whoever implements this should log `typeof payload.agent_id` once
+from a real subagent tool call before building on it — a minute's work that
+converts a documented expectation into a fact.
 
 **Why this isn't already done.** It changes numbers the user already reads:
 `/remy`'s "🧰 tools N calls · N failed" and the adaptive payload's
