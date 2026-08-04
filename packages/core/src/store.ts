@@ -42,11 +42,26 @@ export function logError(context: string, err: unknown): void {
 
 export function openDb(path?: string): Database {
   const db = new Database(path ?? dbPath(), { create: true });
-  db.run("PRAGMA journal_mode = WAL");
-  // 250ms wasn't enough once the statusline started polling at ~1Hz
-  // (refreshInterval) on top of hook writes — bumped after seeing real
-  // "database is locked" errors in remy.log under that load.
+  // busy_timeout MUST come first — before ANY other statement, not just before
+  // the writes. The default is 0, so until it is set a SQLITE_BUSY fails
+  // instantly instead of retrying, and the very first statement on a fresh
+  // connection is the expensive one: it opens the file, reads the schema, and
+  // attaches (or recovers) the WAL index. Any of those can return BUSY. A bare
+  // SELECT fails here just as readily as a pragma — this is not about which
+  // statement takes a write lock.
+  //
+  // What makes it constant rather than rare: under refreshInterval the
+  // statusline opens the DB ~1/sec alongside hook opens, and the last
+  // connection to close checkpoints and takes an exclusive lock to unlink the
+  // -wal file. Anyone arriving in that window collides.
+  //
+  // This ordering was previously reversed, which is why raising the timeout
+  // from 250ms to 2000ms didn't help: the failing statement ran before the
+  // timeout existed. It cost 192 logged failures in a single day, each one a
+  // statusline that fell back to a bare "⚡ remy". Note the trade — contended
+  // opens now block (sub-second in practice) rather than failing fast.
   db.run("PRAGMA busy_timeout = 2000");
+  db.run("PRAGMA journal_mode = WAL");
   migrate(db);
   return db;
 }
