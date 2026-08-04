@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { BRAND, type TipRow } from "@ccpp/core";
-import { bar, contextAlarmLine, rateLimitBadge, spendField, splash, tipLine } from "../src/ui";
+import { BRAND, type SessionRow, type TipRow } from "@ccpp/core";
+import { bar, contextAlarmLine, fmtCost, fmtTok, rateLimitBadge, spendField, splash, tipLine, weekTotals } from "../src/ui";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -157,6 +157,96 @@ describe("splash — the welcome is a moment, not wallpaper", () => {
       expect(out).toContain("REMY v0.2.0");
       expect(out).toContain("3 sessions");
     }
+  });
+});
+
+describe("fmtTok — the token counts on every surface", () => {
+  test("switches unit at 1k and 1M, and drops the decimal once the number is wide", () => {
+    // 🪙 counts appear in a 55-char statusline budget, so precision is traded
+    // for width as the number grows. These boundaries are the whole contract.
+    expect(fmtTok(0)).toBe("0");
+    expect(fmtTok(999)).toBe("999");
+    expect(fmtTok(1_000)).toBe("1.0k");
+    expect(fmtTok(9_999)).toBe("10.0k");
+    expect(fmtTok(10_000)).toBe("10k");
+    expect(fmtTok(1_000_000)).toBe("1.00M");
+    expect(fmtTok(10_000_000)).toBe("10M");
+  });
+
+  test("never renders something that isn't a number", () => {
+    // A count is derived from sums and ratios; a NaN reaching the statusline
+    // would render literally, and "InfinityM" is not a quantity anyone can act
+    // on. Nonsense in, 0 out — matching the existing negative clamp.
+    expect(fmtTok(-5)).toBe("0");
+    expect(fmtTok(NaN)).toBe("0");
+    expect(fmtTok(Infinity)).toBe("0");
+    expect(fmtTok(-Infinity)).toBe("0");
+    for (const n of [0, 1, 1e3, 1e6, NaN, Infinity, -1]) {
+      expect(fmtTok(n)).not.toMatch(/NaN|Infinity|undefined/);
+    }
+  });
+});
+
+describe("fmtCost", () => {
+  test("renders real spend and nothing else", () => {
+    // Returning null is what lets the caller drop the field entirely rather
+    // than print "$0.00" at someone who is on a plan with no per-call cost.
+    expect(fmtCost(1.239)).toBe("$1.24");
+    expect(fmtCost(0)).toBeNull();
+    expect(fmtCost(-1)).toBeNull();
+    expect(fmtCost(null)).toBeNull();
+    expect(fmtCost(undefined)).toBeNull();
+    expect(fmtCost(NaN)).toBeNull();
+    expect(fmtCost(Infinity)).toBeNull();
+  });
+});
+
+describe("weekTotals", () => {
+  const row = (o: Partial<SessionRow>): SessionRow =>
+    ({
+      session_id: "s", started_at: "2026-08-01T00:00:00Z", ended_at: null, model: null,
+      cwd_hash: null, repo_hash: null, tokens_in: 0, tokens_out: 0, cache_read: 0,
+      cache_write: 0, cost_usd: null, tool_calls: 0, tool_fails: 0, compacts_auto: 0,
+      compacts_manual: 0, used_plan_mode: 0, max_context_pct: 0, context_window: null,
+      claude_md_bytes: null, perm_denials: 0, ...o,
+    }) as SessionRow;
+
+  test("sums the week and counts plan sessions rather than summing them", () => {
+    const totals = weekTotals([
+      row({ tokens_in: 100, tokens_out: 10, cache_read: 1_000, cost_usd: 1.5, used_plan_mode: 1, compacts_auto: 2 }),
+      row({ tokens_in: 200, tokens_out: 20, cache_read: 2_000, cost_usd: 2.25, used_plan_mode: 0, compacts_auto: 1 }),
+      row({ tokens_in: 300, tokens_out: 30, cache_read: 3_000, cost_usd: null, used_plan_mode: 1 }),
+    ]);
+    expect(totals.sessions).toBe(3);
+    expect(totals.tokensIn).toBe(600);
+    expect(totals.tokensOut).toBe(60);
+    expect(totals.cacheRead).toBe(6_000);
+    expect(totals.cost).toBeCloseTo(3.75, 5);
+    // Pins the number, not the method: used_plan_mode is written via
+    // MAX(used_plan_mode, ?) so it is only ever 0 or 1, which makes counting
+    // and summing indistinguishable. Nothing here can tell them apart, and a
+    // fixture with used_plan_mode > 1 would be testing a state the store
+    // cannot produce.
+    expect(totals.planSessions).toBe(2);
+    expect(totals.autoCompacts).toBe(3);
+  });
+
+  test("a session with no recorded cost contributes nothing to the week", () => {
+    // Note what this does NOT prove: `null` coerces to 0 in JS arithmetic, so
+    // the `?? 0` in weekTotals is defensive against `undefined`, not against
+    // the null this fixture uses. Removing it keeps this test green. What the
+    // assertion pins is the outcome a user sees — an unpriced session leaves
+    // the week's total alone instead of blanking it.
+    const totals = weekTotals([row({ cost_usd: null }), row({ cost_usd: 2 })]);
+    expect(totals.cost).toBe(2);
+    expect(Number.isFinite(totals.cost)).toBe(true);
+  });
+
+  test("an empty week is all zeroes, not NaN", () => {
+    const totals = weekTotals([]);
+    expect(totals).toEqual({
+      sessions: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cost: 0, planSessions: 0, autoCompacts: 0,
+    });
   });
 });
 

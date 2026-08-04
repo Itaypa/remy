@@ -14,6 +14,11 @@ import {
 // report renderers stay plain unicode.
 
 export function fmtTok(n: number): string {
+  // Non-finite input renders as "NaN" or "InfinityM" otherwise — literal
+  // nonsense on the statusline, the same failure family as an unfilled
+  // {placeholder}. The negative clamp below already decided that a
+  // nonsensical count shows as 0; this just finishes that thought.
+  if (!Number.isFinite(n)) return "0";
   if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 2)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
   return String(Math.max(0, Math.round(n)));
