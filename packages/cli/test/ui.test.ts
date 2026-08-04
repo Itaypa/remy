@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BRAND, type TipRow } from "@ccpp/core";
-import { contextAlarmLine, rateLimitBadge, spendField, splash, tipLine } from "../src/ui";
+import { bar, contextAlarmLine, rateLimitBadge, spendField, splash, tipLine } from "../src/ui";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -104,6 +104,19 @@ describe("rateLimitBadge", () => {
     expect(rateLimitBadge({ five_hour: { used_percentage: 42 } })).toContain("(5h)");
     expect(rateLimitBadge({ seven_day: { used_percentage: 33 } })).toContain("(7d)");
   });
+
+  test("escalates colour at 60 and 80 — the warning has to arrive with room to act", () => {
+    // Pins where the badge turns yellow and red. Nothing tested these, so the
+    // red line could drift to 95% and the user would first see it when the
+    // headroom was nearly gone — which is the one moment the field exists for.
+    const red = "\x1b[31m";
+    const yellow = "\x1b[33m";
+    expect(rateLimitBadge({ five_hour: { used_percentage: 80 } })).toContain(red);
+    expect(rateLimitBadge({ five_hour: { used_percentage: 79 } })).not.toContain(red);
+    expect(rateLimitBadge({ five_hour: { used_percentage: 79 } })).toContain(yellow);
+    expect(rateLimitBadge({ five_hour: { used_percentage: 60 } })).toContain(yellow);
+    expect(rateLimitBadge({ five_hour: { used_percentage: 59 } })).not.toContain(yellow);
+  });
 });
 
 describe("spendField — one field chosen by plan type, never both", () => {
@@ -144,6 +157,30 @@ describe("splash — the welcome is a moment, not wallpaper", () => {
       expect(out).toContain("REMY v0.2.0");
       expect(out).toContain("3 sessions");
     }
+  });
+});
+
+describe("bar", () => {
+  test("renders a fixed width across the normal range", () => {
+    for (const pct of [0, 1, 50, 99, 100]) {
+      expect(bar(pct)).toHaveLength(10);
+    }
+    expect(bar(0)).toBe("░░░░░░░░░░");
+    expect(bar(100)).toBe("▓▓▓▓▓▓▓▓▓▓");
+    expect(bar(50)).toBe("▓▓▓▓▓░░░░░");
+  });
+
+  test("clamps out-of-range input instead of throwing", () => {
+    // The clamp is not cosmetic: String.prototype.repeat throws RangeError on
+    // a negative count, so an unclamped pct over 100 or under 0 takes the
+    // whole statusline down. A context percentage is a computed ratio and
+    // nothing upstream guarantees it lands inside 0-100.
+    for (const pct of [-50, -1, 101, 150, 1e6]) {
+      expect(() => bar(pct)).not.toThrow();
+      expect(bar(pct)).toHaveLength(10);
+    }
+    expect(bar(150)).toBe("▓▓▓▓▓▓▓▓▓▓");
+    expect(bar(-50)).toBe("░░░░░░░░░░");
   });
 });
 });
