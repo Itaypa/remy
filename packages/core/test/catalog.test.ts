@@ -16,11 +16,12 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "subagent-offload": { reads: 42, ctx_pct: 95 },
   "model-fit": { n: 12, tier: "opus" },
   "tools-over-bash": { count: 42 },
+  "claude-md-missing": { files: 8, worst: 12 },
+  "claude-md-prune": { kb: 128 },
   // Wisdom tips carry no placeholders — empty evidence renders them as-is.
   "clear-between-tasks": {},
   "context-band": { turns: 12 },
   "compact-focus": {},
-  "claude-md-prune": {},
   "mistake-to-rule": {},
   "cli-over-mcp": {},
   "rule-of-five": {},

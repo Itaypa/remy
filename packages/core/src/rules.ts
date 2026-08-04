@@ -25,6 +25,9 @@ export interface SessionSnapshot {
    * healthy 60% band across them (computed in transcript.ts). */
   redZoneTurns: number;
   redZoneExcessTokens: number;
+  /** Bytes of CLAUDE.md memory the host loads for this cwd (claudemd.ts).
+   * null = never probed — the rules stay silent rather than guess. */
+  claudeMdBytes: number | null;
 }
 
 export interface Finding {
@@ -59,6 +62,16 @@ const MODEL_FIT_MAX_OUT_TOKENS = 3_000;
 const MODEL_FIT_MIN_TRIVIAL_RATE = 0.5;
 const PLAN_HABIT_SUPPRESS_RATE = 0.5;
 const PLAN_HABIT_MIN_SESSIONS = 5;
+// Bloat floor in BYTES, deliberately not lines. Bytes-per-line is not stable
+// enough to convert: unwrapped prose runs 150–250 B/line, dense bullet lists
+// ~30, and non-Latin scripts cost 2–3 bytes per character — a line-derived
+// threshold would nag a short Japanese file and stay silent on a 400-line
+// one. So the rule measures bytes and the copy speaks in KB. 20k sits well
+// clear of files that are merely thorough (this repo's own is ~9k).
+const CLAUDE_MD_BLOAT_BYTES = 20_000;
+// What a pruned file should weigh; the gap is what a session stops paying.
+const CLAUDE_MD_TARGET_BYTES = 12_000;
+const BYTES_PER_TOKEN = 4;
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const VERIFY_CLASSES = new Set(["test", "build", "lint"]);
@@ -114,7 +127,47 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
   const shellReads = detectShellReads(s);
   if (shellReads) findings.push(shellReads);
 
+  applyClaudeMd(s, findings);
+
   return findings.sort((a, b) => b.estSavingsTokens - a.estSavingsTokens);
+}
+
+// CLAUDE.md, in both directions — it runs last because both halves are about
+// other findings rather than raw counts.
+//
+// Missing: an absent CLAUDE.md is only worth coaching when it demonstrably
+// cost something, so it rides on observed re-read churn and *replaces* that
+// finding instead of joining it. Two tips for one incident is a nag, and
+// worse, letting both through would re-serve advice the user snoozed —
+// dismissing `reread-churn` wouldn't stop the same point arriving under a new
+// id. It inherits the re-read estimate because it is the same waste, named
+// by its cause. (`detectRedZoneRiding` yields to `auto-compact` the same way.)
+//
+// Bloat: `context-tax` already ends with "prune CLAUDE.md", so when a heavy
+// startup context is being reported there, adding this one says it twice.
+function applyClaudeMd(s: SessionSnapshot, findings: Finding[]): void {
+  const bytes = s.claudeMdBytes;
+  if (bytes === null) return; // never probed — say nothing
+
+  if (bytes === 0) {
+    const i = findings.findIndex((f) => f.tipId === "reread-churn");
+    if (i === -1) return;
+    const [reread] = findings.splice(i, 1);
+    findings.push({
+      tipId: "claude-md-missing",
+      evidence: reread!.evidence,
+      estSavingsTokens: reread!.estSavingsTokens,
+    });
+    return;
+  }
+
+  if (bytes < CLAUDE_MD_BLOAT_BYTES) return;
+  if (findings.some((f) => f.tipId === "context-tax")) return;
+  findings.push({
+    tipId: "claude-md-prune",
+    evidence: { kb: Math.round(bytes / 1000) },
+    estSavingsTokens: Math.round((bytes - CLAUDE_MD_TARGET_BYTES) / BYTES_PER_TOKEN),
+  });
 }
 
 // Reading and searching through the shell (cat/grep/find/ls) where Read,

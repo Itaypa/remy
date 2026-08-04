@@ -111,6 +111,13 @@ function migrate(db: Database): void {
   // statusline payload) — a plain number. Rules use it so a 170k-context
   // turn reads as red-zone on a 200k window but healthy on a 1M one.
   addColumnIfMissing(db, "sessions", "context_window", "context_window INTEGER");
+  // Bytes of CLAUDE.md-family memory the host loads for this session's cwd
+  // (see claudemd.ts) — a plain number, local-only, never on any wire.
+  // NULL and 0 mean different things and the rules depend on the difference:
+  // NULL is "never probed" (a row from before this shipped, or a session whose
+  // SessionStart hook never fired), 0 is "probed, the user genuinely has none".
+  // Collapsing them would fire the missing-CLAUDE.md tip at every old session.
+  addColumnIfMissing(db, "sessions", "claude_md_bytes", "claude_md_bytes INTEGER");
   // Generic local kv: tip throttles, spinner ownership, welcome_version,
   // the adaptive analyzer's clock. Named for a sync that no longer exists —
   // kept as-is so an existing ~/.remy/remy.db upgrades without a migration.
@@ -186,6 +193,9 @@ export interface SessionRow {
   max_context_pct: number;
   /** Host-reported context window size (local-only, never synced). */
   context_window: number | null;
+  /** Bytes of CLAUDE.md memory loaded for this session's cwd (local-only).
+   * NULL = never probed, 0 = probed and absent. */
+  claude_md_bytes: number | null;
 }
 
 export interface TipRow {
@@ -238,6 +248,15 @@ export function upsertSession(
        cwd_hash = COALESCE(excluded.cwd_hash, sessions.cwd_hash),
        repo_hash = COALESCE(excluded.repo_hash, sessions.repo_hash)`,
   ).run(s.session_id, s.ts, s.model ?? null, s.cwd_hash ?? null, s.repo_hash ?? null);
+}
+
+/** Record the CLAUDE.md byte count for a session. Coerces to a whole number
+ * at the write site: SQLite's INTEGER affinity does NOT reject a string, so
+ * the column's type is not the privacy guarantee — this coercion is. Anything
+ * non-finite is stored as NULL ("never probed") rather than guessed at. */
+export function setClaudeMdBytes(db: Database, sessionId: string, bytes: unknown): void {
+  const n = typeof bytes === "number" && Number.isFinite(bytes) ? Math.max(0, Math.trunc(bytes)) : null;
+  db.query(`UPDATE sessions SET claude_md_bytes = ? WHERE session_id = ?`).run(n, sessionId);
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {

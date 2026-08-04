@@ -10,6 +10,8 @@ import {
   applyAdaptResponse,
   buildAdaptPayload,
   buildAdaptPrompt,
+  claudeMdBytes,
+  setClaudeMdBytes,
   parseAdaptOutput,
   contextFromPayload,
   binDir,
@@ -166,6 +168,11 @@ async function ingest(): Promise<void> {
     case "SessionStart": {
       upsertSession(db, { session_id: sessionId, ts: now, cwd_hash: cwdHash });
       insertEvent(db, sanitizeEvent({ session_id: sessionId, ts: now, type: "session_start", cwd_hash: cwdHash })!);
+      // How much project memory this session starts with (stat only, never a
+      // read — see claudemd.ts). Every source counts, not just "startup": a
+      // resumed session loads the same files. claudeMdBytes() cannot throw,
+      // so this can't cost the splash below.
+      if (typeof payload.cwd === "string") setClaudeMdBytes(db, sessionId, claudeMdBytes(payload.cwd));
       if (payload.source === "startup") {
         const week = weekTotals(recentSessions(db, new Date(Date.now() - WEEK_MS).toISOString()));
         const tip = activeTip(db);
@@ -327,6 +334,10 @@ async function analyzeTranscript(
     cacheExpiryWorstGapMinutes: stats.cacheExpiryWorstGapMinutes,
     redZoneTurns: stats.redZoneTurns,
     redZoneExcessTokens: stats.redZoneExcessTokens,
+    // NULL when SessionStart never ran for this id (plugin installed
+    // mid-session, or a --continue into an older session) — the rules read
+    // that as "unknown" and stay quiet.
+    claudeMdBytes: row?.claude_md_bytes ?? null,
   });
   // Anti-nag: a user whose recent habit is already plan-first doesn't need
   // the plan-mode tip re-filed for the occasional direct session.

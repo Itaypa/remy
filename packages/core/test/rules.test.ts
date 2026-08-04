@@ -37,6 +37,7 @@ function snapshot(overrides: Partial<SessionSnapshot>): SessionSnapshot {
     cacheExpiryWorstGapMinutes: 0,
     redZoneTurns: 0,
     redZoneExcessTokens: 0,
+    claudeMdBytes: null,
     ...overrides,
   };
 }
@@ -61,6 +62,7 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     used_plan_mode: 0,
     max_context_pct: 0,
     context_window: null,
+    claude_md_bytes: null,
     ...overrides,
   };
 }
@@ -119,6 +121,58 @@ describe("waste signatures", () => {
 
     const three = analyzeSession(snapshot({ toolCalls: reads.slice(0, 3) }));
     expect(three.some((x) => x.tipId === "reread-churn")).toBe(false);
+  });
+
+  describe("CLAUDE.md", () => {
+    const rereads = Array.from({ length: 5 }, () => call("Read"));
+
+    test("an unprobed session (null) says nothing in either direction", () => {
+      // The common case for any row written before this shipped. Guessing
+      // here would nag every historical session at once.
+      const findings = analyzeSession(snapshot({ toolCalls: rereads, claudeMdBytes: null }));
+      expect(findings.some((f) => f.tipId.startsWith("claude-md"))).toBe(false);
+      expect(findings.some((f) => f.tipId === "reread-churn")).toBe(true);
+    });
+
+    test("missing CLAUDE.md replaces the reread-churn finding rather than joining it", () => {
+      const findings = analyzeSession(snapshot({ toolCalls: rereads, claudeMdBytes: 0 }));
+      const missing = findings.find((f) => f.tipId === "claude-md-missing");
+      expect(missing).toBeDefined();
+      // Same waste, named by its cause — so it inherits the estimate, and the
+      // finding it explains must be gone. Two tips for one incident is a nag,
+      // and it would also re-serve advice the user had already dismissed.
+      expect(findings.some((f) => f.tipId === "reread-churn")).toBe(false);
+      expect(missing!.estSavingsTokens).toBe(2 * 2_000);
+      expect(missing!.evidence.worst).toBe(5);
+    });
+
+    test("missing CLAUDE.md alone is silent — it only speaks when re-reading actually cost something", () => {
+      const findings = analyzeSession(snapshot({ toolCalls: [call("Read")], claudeMdBytes: 0 }));
+      expect(findings.some((f) => f.tipId === "claude-md-missing")).toBe(false);
+    });
+
+    test("a thorough-but-reasonable CLAUDE.md is not nagged", () => {
+      // This repo's own file is ~9k. It must stay silent, or the product
+      // scolds its own authors for documenting their project.
+      const findings = analyzeSession(snapshot({ claudeMdBytes: 8_920 }));
+      expect(findings.some((f) => f.tipId === "claude-md-prune")).toBe(false);
+    });
+
+    test("a bloated CLAUDE.md fires with its size in KB and the tokens a prune returns", () => {
+      const findings = analyzeSession(snapshot({ claudeMdBytes: 40_000 }));
+      const prune = findings.find((f) => f.tipId === "claude-md-prune");
+      expect(prune).toBeDefined();
+      expect(prune!.evidence.kb).toBe(40);
+      expect(prune!.estSavingsTokens).toBe((40_000 - 12_000) / 4);
+    });
+
+    test("context-tax suppresses the prune tip — its own fix already says to prune", () => {
+      const findings = analyzeSession(
+        snapshot({ claudeMdBytes: 40_000, firstContextTokens: 90_000 }),
+      );
+      expect(findings.some((f) => f.tipId === "context-tax")).toBe(true);
+      expect(findings.some((f) => f.tipId === "claude-md-prune")).toBe(false);
+    });
   });
 
   test("edit-thrash needs 6+ edits AND 3+ interleaved re-reads of the same file", () => {

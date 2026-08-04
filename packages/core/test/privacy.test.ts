@@ -11,6 +11,9 @@ import {
   buildAdaptPayload,
   contextFromPayload,
   upsertSession,
+  claudeMdBytes,
+  setClaudeMdBytes,
+  getSession,
 } from "../src/index";
 
 const MARKER = "SUPER_SECRET_PROMPT_BODY_should_never_be_stored";
@@ -130,6 +133,34 @@ describe("privacy gate", () => {
     );
     expect(dump).not.toContain(MARKER);
     expect(dump).not.toContain("/Users/x");
+  });
+
+  test("the CLAUDE.md probe yields a byte count and never the path it probed", () => {
+    // claudemd.ts is the one place in core that touches the filesystem using
+    // a raw path. Its whole output surface must be a number: the path goes in
+    // and only a size comes out, so there is nothing path-shaped to store.
+    const hostile = `/Users/x/${MARKER}`;
+    const bytes = claudeMdBytes(hostile);
+    expect(typeof bytes).toBe("number");
+    expect(Number.isFinite(bytes)).toBe(true);
+    expect(JSON.stringify(bytes)).not.toContain(MARKER);
+  });
+
+  test("a hostile value cannot reach the claude_md_bytes column — INTEGER affinity is not the guarantee", () => {
+    // SQLite's INTEGER affinity does NOT reject a string: writing a path into
+    // this column would store it verbatim. The coercion in setClaudeMdBytes
+    // is what actually holds the invariant, so that is what's asserted here.
+    const db = openDb(":memory:");
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:00:00.000Z" });
+    setClaudeMdBytes(db, "s1", `/Users/x/${MARKER}/CLAUDE.md`);
+    const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
+    expect(dump).not.toContain(MARKER);
+    expect(dump).not.toContain("/Users");
+    expect(getSession(db, "s1")!.claude_md_bytes).toBeNull();
+
+    // A real probe stores a plain number.
+    setClaudeMdBytes(db, "s1", 8_920);
+    expect(getSession(db, "s1")!.claude_md_bytes).toBe(8_920);
   });
 
   test("contextFromPayload carries no content — numbers and a model id only", () => {
