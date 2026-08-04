@@ -6,16 +6,30 @@ is the only door into the store.
 
 ## Hooks (`hooks/hooks.json`)
 
-Five events are registered, all piping their stdin JSON to `remy ingest`.
+Seven events are registered, all piping their stdin JSON to `remy ingest`.
 Common fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name`.
 
 | Event | Extra fields we use | What ingest does |
 |---|---|---|
 | `SessionStart` | `source` (`startup`/`resume`/`clear`/`compact`) | upsert session; on `startup` emit the splash via `systemMessage` JSON output (shown to the user, never added to model context) |
-| `PostToolUse` | `tool_name`, `tool_input` (hashed target only), `tool_response` (error flag only) | record tool event, bump counters |
+| `PostToolUse` | `tool_name`, `tool_input` (hashed target only) | record tool event, bump counters. **Fires only when a tool call succeeds** |
+| `PostToolUseFailure` | same | the failure half — without it `tool_fails` is structurally always 0 |
+| `PermissionDenied` | — (payload deliberately unread) | bump `sessions.perm_denials`, print nothing |
 | `PreCompact` | `trigger` (`auto`/`manual`) | record compact; `auto` immediately files an auto-compact finding |
 | `Stop` | — | full transcript parse → session aggregates → rules → tips, then (see below) at most one transient `systemMessage` nudge |
 | `SessionEnd` | — | same as Stop's transcript analysis + set `ended_at` |
+
+**Permission hooks — what we register and what we refuse to.** `PermissionDenied`
+is reactive: it fires after the auto-mode classifier has already refused a call,
+and its stdout is read only for a `{"hookSpecificOutput":{"retry":true}}`
+directive. We register it and print nothing, so it is purely an observation. Its
+sibling **`PermissionRequest` is deliberately NOT registered**: there, exit 0
+means "use the hook's decision if provided", so a process in that position can
+allow or deny tool calls on the user's behalf. A coaching tool has no business
+in the approval path, and `ingest` already prints JSON on two other branches —
+one careless refactor is all it would take. (Note also that a non-zero exit on
+these events is *not* ignored: it surfaces stderr to the user. REMY exits 0
+unconditionally, so this cannot bite, but the contract is not "silent".)
 
 Hook output contract: exit 0 always (a coaching tool must never break the
 host); errors go to `~/.remy/remy.log`. `Stop`'s payload can carry raw

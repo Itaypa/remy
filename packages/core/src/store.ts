@@ -121,6 +121,11 @@ function migrate(db: Database): void {
   // SessionStart hook never fired), 0 is "probed, the user genuinely has none".
   // Collapsing them would fire the missing-CLAUDE.md tip at every old session.
   addColumnIfMissing(db, "sessions", "claude_md_bytes", "claude_md_bytes INTEGER");
+  // Tool calls denied by the host's auto-mode classifier (the PermissionDenied
+  // hook). Defaults to 0 rather than NULL, so rows written before this shipped
+  // are indistinguishable from genuinely denial-free ones — any future *rate*
+  // rule has to scope its population by started_at rather than trusting a 0.
+  addColumnIfMissing(db, "sessions", "perm_denials", "perm_denials INTEGER DEFAULT 0");
   // Generic local kv: tip throttles, spinner ownership, welcome_version,
   // the adaptive analyzer's clock. Named for a sync that no longer exists —
   // kept as-is so an existing ~/.remy/remy.db upgrades without a migration.
@@ -205,6 +210,8 @@ export interface SessionRow {
   /** Bytes of CLAUDE.md memory loaded for this session's cwd (local-only).
    * NULL = never probed, 0 = probed and absent. */
   claude_md_bytes: number | null;
+  /** Tool calls denied by the host's auto-mode classifier (local-only). */
+  perm_denials: number;
 }
 
 export interface TipRow {

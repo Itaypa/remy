@@ -63,6 +63,7 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     max_context_pct: 0,
     context_window: null,
     claude_md_bytes: null,
+    perm_denials: 0,
     ...overrides,
   };
 }

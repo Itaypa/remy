@@ -230,6 +230,18 @@ async function ingest(): Promise<void> {
       }
       break;
     }
+    // A tool call the host's auto-mode classifier refused. Counted, nothing
+    // else: the payload carries tool_input and a free-text `reason`, none of
+    // which is read here. This branch must never write to stdout — on
+    // PermissionDenied the host reads stdout for a `retry` directive, so a
+    // coaching tool printing here would be steering the permission flow.
+    // (PermissionRequest, where stdout IS an allow/deny decision, is
+    // deliberately not registered at all.)
+    case "PermissionDenied": {
+      upsertSession(db, { session_id: sessionId, ts: now, cwd_hash: cwdHash });
+      db.query(`UPDATE sessions SET perm_denials = perm_denials + 1 WHERE session_id = ?`).run(sessionId);
+      break;
+    }
     case "PreCompact": {
       const trigger = payload.trigger === "auto" ? "auto" : "manual";
       upsertSession(db, { session_id: sessionId, ts: now, cwd_hash: cwdHash });

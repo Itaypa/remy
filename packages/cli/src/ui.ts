@@ -291,7 +291,9 @@ export function renderReport(opts: {
     ...(cacheHit != null
       ? [`│ 💾 cache    ${cacheHit}% reused from cache (${fmtTok(s.cache_read)} tokens ≈ free)`]
       : []),
-    `│ 🧰 tools    ${s.tool_calls} calls · ${s.tool_fails} failed`,
+    // Denials are appended only when there were any — a permanent "0 denied"
+    // on every report is noise, and the noise budget is law.
+    `│ 🧰 tools    ${s.tool_calls} calls · ${s.tool_fails} failed${s.perm_denials > 0 ? ` · ${s.perm_denials} denied` : ""}`,
     `│ 🧠 context  ${bar(s.max_context_pct)} peaked at ${Math.round(s.max_context_pct)}% · compacts: ${s.compacts_auto} auto / ${s.compacts_manual} manual`,
   );
 
