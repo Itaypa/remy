@@ -95,6 +95,27 @@ describe("transcript parser", () => {
     expect(stats.toolCalls[2]!.ok).toBe(true);
   });
 
+  test("every edit tool counts as an edit — Write included", () => {
+    // editCalls is the input to no-verify and plan-mode, and only Edit was
+    // ever exercised here: dropping Write from EDIT_TOOLS broke no test, so a
+    // Write-heavy session would silently stop qualifying for either rule.
+    const text = [
+      assistantLine({
+        id: "m1",
+        usage: { input_tokens: 10 },
+        content: [
+          use("t1", "Write", { file_path: "/a.ts" }),
+          use("t2", "MultiEdit", { file_path: "/b.ts" }),
+          use("t3", "NotebookEdit", { notebook_path: "/c.ipynb" }),
+          use("t4", "Edit", { file_path: "/d.ts" }),
+          use("t5", "Read", { file_path: "/e.ts" }),
+        ],
+      }),
+    ].join("\n");
+    const stats = parseTranscript(text, 200_000);
+    expect(stats.editCalls).toBe(4);
+  });
+
   test("hashes tool targets — raw paths never appear in output", () => {
     const text = assistantLine({
       id: "m1",
@@ -238,6 +259,23 @@ describe("cache-expiry detection (timestamp-verified idle gaps that re-wrote a f
         assistantLine({ id: "m1", atMin: 0, usage: { input_tokens: 2_000, cache_creation_input_tokens: 140_000 } }),
         warmTurn("m2", 2),
         coldReturn("m3", 4), // 2-min gap — same usage shape, no idle gap
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.cacheExpiries).toBe(0);
+  });
+
+  test("a coffee-break gap is not an idle expiry — the floor is 30 minutes, not any pause", () => {
+    // 20 minutes: longer than the 2-min drift case above, still inside the
+    // prompt-cache TTL's practical window. Pins CACHE_EXPIRY_MIN_GAP_MS — the
+    // 2-min case sat so far below the floor that dropping it to 5 minutes
+    // broke nothing, which would have started blaming ordinary pauses (a
+    // build, a code review, lunch) for a cache bust they didn't cause.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "m1", atMin: 0, usage: { input_tokens: 2_000, cache_creation_input_tokens: 140_000 } }),
+        warmTurn("m2", 2),
+        coldReturn("m3", 22), // 20-min gap
       ].join("\n"),
       200_000,
     );
