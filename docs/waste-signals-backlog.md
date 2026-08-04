@@ -159,34 +159,37 @@ Worth knowing when deciding: the rules already disagree with the report.
 transcript data, so today the report's totals and the tips beside them are
 counting different populations.
 
-## Open: `PreCompact` appears never to fire — `auto-compact` may never have fired for anyone
+## Unverified: nothing has compacted since `PreCompact` was registered
 
-Evidence, from this machine on 2026-08-05:
+**An earlier version of this note claimed the hook never fires. That claim was
+wrong and is retracted** — it confused "REMY was recording events" with "this
+plugin's PreCompact hook was registered", which are different installs.
 
-- **Zero `compact` events, ever.** 2,485 `tool_use`, 80 `stop`, 48 `session_start`
-  — and 0 of type `compact`. `compacts_auto` and `compacts_manual` are 0 across
-  all 59 sessions.
-- **Compactions demonstrably happened.** Eight `compact_boundary` entries across
-  five transcripts (all `trigger: "manual"`, pre-token counts up to 460k).
-- **At least one happened while REMY was actively recording.** Session
-  `1d5874c5` has 156 events spanning 09:28–19:59 on 2026-08-04; its compaction
-  is timestamped 18:16:55, squarely inside that window. No compact event, no
-  counter increment.
-- **The handler is fine and never ran.** `remy.log` contains zero `[ingest]`
-  entries, so nothing threw. The installed plugin (0.3.1) does register
-  `PreCompact`.
+What is actually true on this machine:
 
-Consequences if confirmed: `auto-compact` — the largest estimate in the catalog
-at ~60k 🪙 — can never be filed, because `index.ts` files it **only** from the
-`PreCompact` branch. `detectRedZoneRiding`'s `if (s.autoCompacts > 0) return null`
-suppression is likewise unreachable. And the adaptive payload tells the model
-this developer never compacts, while the transcripts say otherwise.
+- **Zero `compact` events, ever**, across 2,485 `tool_use` and 48
+  `session_start`. `compacts_auto`/`compacts_manual` are 0 on all 59 sessions.
+- **Eight compactions did happen** — `compact_boundary` entries across five
+  transcripts, all `trigger: "manual"`, pre-token counts up to 460k.
+- **But all eight predate the hook.** The marketplace clone's `hooks.json` —
+  the file that registers `PreCompact` — dates to 2026-08-04 21:58, and the
+  repo's first commit is 21:24 that evening. The most recent compaction was
+  18:16, more than three hours earlier. Event recording before that came from
+  an earlier install whose hook set is not inspectable.
 
-Not fixed here because the cause is upstream of our code: the handler works
-(the run-remy driver drives `PreCompact` and asserts on it), so the question is
-why the host isn't calling it — a `PostCompact` event also exists now, and the
-host has a `microcompact` path. Deciding that needs an interactive session:
-run `/compact` and watch whether `remy ingest` is invoked.
+So zero compact events is exactly what the timeline predicts. There is no
+evidence of a defect, and none of an absence either.
+
+**How to settle it in one minute:** run `/compact` in any session, then check
+`SELECT compacts_manual FROM sessions ORDER BY started_at DESC LIMIT 1`. A 1
+means the hook works and this note can be deleted. A 0 means it genuinely does
+not fire, and then it matters a great deal — `index.ts` files `auto-compact`
+(the catalog's largest estimate, ~60k 🪙) **only** from the `PreCompact`
+branch, and `detectRedZoneRiding`'s `autoCompacts > 0` suppression would be
+unreachable too.
+
+Worth knowing either way: the host now also has a `PostCompact` event and a
+`microcompact` path, neither of which this adapter looks at.
 
 ## Open: the statusline still loses races on the database
 
