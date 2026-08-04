@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BRAND, HINTS, openDb, type TipRow } from "@ccpp/core";
+import { BRAND, HINTS, openDb, setSyncState, type TipRow } from "@ccpp/core";
 import { claimSpinnerTips, clearSpinnerTips, desiredTips, syncSpinnerTips } from "../src/spinner";
 
 // The spinner tip line is written into the user's real settings.json, so
@@ -131,6 +131,23 @@ describe("spinner tip override", () => {
     writeFileSync(settings, JSON.stringify(edited));
     expect(syncSpinnerTips(db, []).status).toBe("user-owned");
     expect(read().spinnerTipsOverride.tips).toEqual(["hand-edited"]);
+  });
+
+  test("a corrupt ownership record makes it back off, not overwrite", () => {
+    // The ownership check compares what's in settings.json against what we
+    // recorded writing. If that record is unreadable we cannot prove the line
+    // is ours — and the safe reading of "cannot prove" is "it's theirs".
+    // Guessing the other way overwrites something a user typed by hand.
+    claimSpinnerTips(db, [TIP]);
+    setSyncState(db, "spinner_tips_written", "{ not json");
+    expect(syncSpinnerTips(db, []).status).toBe("user-owned");
+    expect(read().spinnerTipsOverride.tips.length).toBeGreaterThan(0);
+  });
+
+  test("an ownership record of the wrong shape is treated the same way", () => {
+    claimSpinnerTips(db, [TIP]);
+    setSyncState(db, "spinner_tips_written", '"a string, not an array"');
+    expect(syncSpinnerTips(db, []).status).toBe("user-owned");
   });
 
   test("malformed settings are never clobbered", () => {
