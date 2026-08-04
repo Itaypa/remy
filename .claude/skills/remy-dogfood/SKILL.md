@@ -5,7 +5,98 @@ description: How to install, rebuild, and test the REMY plugin locally against r
 
 # Dogfooding install (local dev)
 
-- The repo doubles as a plugin marketplace: `/plugin marketplace add <repo path>` → `/plugin install remy@remy` → `/reload-plugins` (or a new session) turns hooks + `/remy` commands on for real sessions.
-- **`/plugin install` COPIES the plugin** into `~/.claude/plugins/cache/remy/remy/<version>/` — it does not link back to the repo. **Always rebuild with `bun run build`** (never raw `bun build`): `scripts/build-plugin.ts` stamps the binary (`<git-hash>.<MMDD-HHMM>`) and syncs it into every installed copy (atomic rename), so hooks always run the latest build.
-- The statusline shows `⚙ v<version>+<stamp>` in dev installs only (binary running from outside `~/.claude/plugins`, or `REMY_DEV=1`) — pointing the project's `statusLine` at the repo binary (`packages/plugin-claude-code/bin/remy statusline`) keeps the live build stamp visible while iterating.
-- To exercise the waste rules end-to-end without real sessions: synthesize a transcript, pipe hook JSON (`{"hook_event_name":"Stop","session_id":…,"transcript_path":…}`) into `remy ingest` with `REMY_DATA_DIR` pointed at a temp dir, then render `remy statusline`/`remy report` against the same dir. Never seed `~/.remy` with synthetic data casually — `dismiss` writes a 30-day cooldown per tip id.
+## Install
+
+`/plugin marketplace add Itaypa/remy` (or a local repo path) → `/plugin install remy@remy`
+→ `/reload-plugins` (or a new session) turns hooks + `/remy` commands on for real sessions.
+
+`/plugin install` **copies** the plugin into `~/.claude/plugins/cache/remy/remy/<version>/`
+— it does not link back to the repo. What it copies is the **launcher**
+(`bin/remy`, ~3KB of POSIX sh), never the 60MB binary.
+
+## How a rebuild reaches a running session
+
+```
+plugin's bin/remy  ──reads version from──▶  its own .claude-plugin/plugin.json
+                   ──resolves──▶  ~/.remy/bin/remy-<version>-<os>-<arch>
+                   ──claims──▶   ~/.remy/bin/current   (the statusline points here)
+```
+
+`bun run build` (never raw `bun build` — the wrapper bakes in
+`REMY_VERSION`/`REMY_CHANNEL`/`REMY_BUILD_ID`) compiles to
+`~/.remy/bin/remy-<repo version>-<host target>` and repoints `current`. Because
+the plugin ships only a launcher, that one file is what every hook and the
+statusline end up executing. There is no longer a "sync the binary into installed
+copies" step — that existed when the plugin shipped a real binary, and is gone.
+
+## ⚠️ The version-pinning trap (the one that will waste your afternoon)
+
+**The launcher resolves the version from the INSTALLED plugin's manifest, not the
+repo's.** So the moment you bump `plugin.json` in the repo, a plugin still
+installed at the old version stops seeing your builds — silently, no error:
+
+```
+repo at 0.3.1 · installed plugin at 0.3.0
+bun run build      → writes remy-0.3.1-darwin-arm64, points current at it
+<any hook fires>   → launcher wants remy-0.3.0-*, finds it, runs it,
+                     and DRAGS current back to the 0.3.0 binary
+```
+
+Verified empirically: pointing `current` at 0.3.1 and firing one hook from the
+v0.3.0 plugin moves it straight back. The statusline follows `current`, so your
+changes vanish from *both* surfaces at once.
+
+After any version bump, re-sync the install (`/plugin update remy@remy`, or
+uninstall + install) before trusting anything you see. To test a build without
+touching the install, run the compiled binary directly.
+
+(For real users this design is correct and self-healing: updating the plugin
+raises the version, the launcher finds no matching binary, and downloads the new
+one in the background.)
+
+## The dev-build badge
+
+The statusline shows `⚙ v<version>+<stamp>` when the binary was built with
+`--channel dev` (the default for `bun run build`); a `--channel release` build
+shows nothing. `REMY_DEV=1/0` forces it either way.
+
+It is decided by the **baked-in channel**, not by where the binary sits on disk.
+An earlier version tested whether the running binary was under `.claude/plugins`
+— it never is, so every real install showed a dev badge (fixed in v0.3.1;
+`packages/cli/test/launcher.test.ts` now compiles both channels and asserts the
+rendered statusline).
+
+## Exercising the waste rules without real sessions
+
+Synthesize a transcript, pipe hook JSON into `remy ingest` with `REMY_DATA_DIR`
+pointed at a temp dir, then render against the same dir:
+
+```bash
+D=$(mktemp -d)
+REMY_DATA_DIR=$D ~/.remy/bin/current ingest <<< '{"hook_event_name":"Stop","session_id":"t1","transcript_path":"…"}'
+REMY_DATA_DIR=$D ~/.remy/bin/current report
+```
+
+`REMY_HOME` retargets the bin dir (use it to simulate a fresh machine against a
+real GitHub release); `REMY_SETTINGS_PATH` retargets settings.json for spinner
+tests; `REMY_ADAPT_CMD` stubs the adaptive analyzer's backend.
+
+**Never seed `~/.remy` with synthetic data casually** — `dismiss` writes a
+30-day cooldown per tip id, and the real DB is your own session history.
+
+## Verifying what a stranger actually gets
+
+`bun run build` writes to the same path the launcher resolves, so a dev build
+**shadows** the released binary. To check the real artifact, re-download and
+verify the checksum:
+
+```bash
+cd ~/.remy/bin
+curl -fsSLO https://github.com/Itaypa/remy/releases/download/v<ver>/remy-<ver>-darwin-arm64
+curl -fsSL https://github.com/Itaypa/remy/releases/download/v<ver>/checksums.txt | grep darwin-arm64
+```
+
+`bun run preflight` gates a tag on everything that would otherwise fail *after*
+one is pushed: manifest/package.json version agreement, the launcher being
+tracked + executable + valid `sh`, no binary committed, every hook event
+registered, typecheck, tests, and all four cross-compiles.
