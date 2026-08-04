@@ -17,10 +17,40 @@ metadata-only.
 | S2 | **Red-zone riding** — many turns at ≥80% context without compacting | Every turn at 80% re-reads ~160k+ tokens; accuracy also degrades (context rot) — Anthropic: stay in the 40–60% band | Main-chain turns with per-turn context ≥80% of the **host-reported window** (`context_window_size` persisted as a local-only `sessions.context_window` column — a 170k turn is red on 200k, healthy on 1M); ≥3 fires; est = tokens above the 60% line; suppressed when auto-compact fired the same session | `context-band` (was a wisdom tip, now rule-backed) | **shipped** |
 | S3 | **Bash instead of dedicated tools** — `cat`/`grep`/`find`/`head`/`ls` via Bash | Anthropic explicitly instructs agents to prefer Read/Grep/Glob: Bash variants dump unbounded output into context, skip pagination/truncation, and often re-run after permission prompts | `classifyCommand` gained a `read-cmd` class (in-memory, like `no-verify` — nothing persisted); ≥6 such calls per session fires, first 2 free at ~1.5k each. Write/action forms of the same words (`cat > file`, `find … -delete`, any redirect) fall back to `other` — a false negative is silence, a false positive is a wrong tip | `tools-over-bash` | **shipped** |
 | S4 | **CLAUDE.md missing / bloated** (taxonomy 2c) | Missing: agent re-derives project facts every session (Anthropic's #1 best practice). Bloated: competes with the task for attention, taxes every session | `stat()` (never a read) the memory family the host would actually load — cwd walked up through its parents, plus `~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` — summed into a **local-only** `sessions.claude_md_bytes` column. Resolving cwd alone was rejected: it reports "no CLAUDE.md" to anyone running from a subdirectory (this repo included). NULL ≠ 0 (never probed vs genuinely absent). Missing fires only alongside `reread-churn` and **replaces** it; bloat is measured in bytes (≥20k), not lines — bytes/line is too unstable to convert — and yields to `context-tax`, whose fix already says to prune | new tip `claude-md-missing`; `claude-md-prune` (was a wisdom tip, now rule-backed) | **shipped** |
-| S5 | **Whole-file rewrite churn** — repeated `Write` to the same existing file instead of targeted `Edit` | Regenerating a whole file pays full output price for every unchanged line; Anthropic: surgical edits | ≥3 `Write` calls to the same target-hash in one session (first Write = create, rest = rewrites); est = rewrites × avg output cost | new tip `surgical-edits` | **backlog** |
+| S5 | **Whole-file rewrite churn** — repeated `Write` to the same existing file instead of targeted `Edit` | Regenerating a whole file pays full output price for every unchanged line; Anthropic: surgical edits | ≥3 `Write` calls to the same target-hash in one session | ~~`surgical-edits`~~ | **dropped** — measured, see below |
 | S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** |
 | S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | `clear-between-tasks` (exists as wisdom tip → gains a real rule) | **backlog** |
 | S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Unlocks cross-session verify-habit rules and admin hygiene aggregates | Persist the existing closed `classifyCommand` enum onto `tool_use` events; closed enum → structurally content-free. Breaking design change: must update `privacy.test.ts` + server `ingest-privacy` suite | — (infrastructure) | **backlog** |
+
+## Dropped after measurement
+
+- **S5 — whole-file rewrite churn.** Measured against 50 real local transcripts
+  (7,285 assistant entries, 277 `Write` calls) before building, and the numbers
+  killed it:
+  - **It barely fires, and fires on the wrong things.** At a floor of 3 it hits
+    3 of 50 sessions / 9 (session, file) pairs. Three of those nine are
+    markdown the host itself asks the agent to write wholesale (`~/.claude/plans/`,
+    the memory dir) where "use Edit instead" is simply wrong advice; two more are
+    already reported as `edit-thrash`. That leaves ~4 real hits in 50 sessions.
+  - **The waste is too small to be worth a tip.** Whole-file `Write` content
+    measures p50 ≈ 2.7k chars (~666 tokens), p90 ≈ 7.7k. A qualifying session
+    wastes ~1k tokens — against `reread-churn` 4k, `no-verify` 10k,
+    `auto-compact` 60k. It could never win `promoteNext`, so it would sit
+    permanently queued in a spinner slot; the only way to surface it is to
+    publish a number ~4× the observable truth, which this product does not do.
+  - **The counts are inflated by a different problem.** 3 of one file's 9
+    "rewrites" were the host's own `"File has not been read yet"` guardrail
+    rejecting the write, followed by an identical retry — a permission story
+    that `retry-loop` already owns, not a tool-choice story.
+  - **The planned refinement was worthless.** "A `Read` before the first `Write`
+    proves the file existed" fired for 0 of the 9 qualifying hashes: the agent
+    reaches for `Write` precisely when it hasn't read the file.
+
+  What would revive it: per-call content *size* on `ToolCall` (derived in memory
+  like `bashClass`, never persisted), which would turn the estimate into a
+  measurement and let it fire only on genuinely expensive files. That derives a
+  number from file content rather than a command string, so it is a deliberate
+  boundary decision for an awake human, not a detector tweak.
 
 ## Out of scope (and why)
 
