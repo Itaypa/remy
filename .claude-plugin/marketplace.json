@@ -9,8 +9,15 @@
   "plugins": [
     {
       "name": "remy",
+      "displayName": "REMY",
       "source": "./packages/plugin-claude-code",
-      "description": "🐀 In-agent coaching: live statusline stats, waste detection, quantified tips. Metadata-only, zero tokens burned."
+      "description": "In-agent coaching for Claude Code: a live statusline (context, cost, git), deterministic waste detection, and short quantified tips delivered through zero-token surfaces. Metadata-only and fully local — no account, no server, nothing ever uploaded.",
+      "category": "productivity",
+      "author": {
+        "name": "Itay Pahima"
+      },
+      "homepage": "https://github.com/Itaypa/remy",
+      "keywords": ["coaching", "tokens", "context", "statusline", "cost", "privacy"]
     }
   ]
 }
