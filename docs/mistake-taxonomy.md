@@ -37,7 +37,16 @@ New detectable signals get triaged in `docs/waste-signals-backlog.md` (S1–S8) 
 
 Each item widens what gets stored and is therefore a **breaking design change** per `CLAUDE.md`: its PR must update `packages/core/test/privacy.test.ts` and the server `ingest-privacy` suite, and may not add any free-text-capable field.
 
-- **2a — persist `tool.cmd_class`**: the `classifyCommand` enum (`test|build|lint|git|pkg|run|other`, already implemented in `transcript.ts` and used in-memory by `no-verify`) becomes a whitelisted enum field on `tool_use` events. Closed enum → cannot carry content by construction. Unlocks cross-session verification-habit rules and admin hygiene aggregates.
+- **2a — persist `tool.cmd_class`**: **deferred** (see S8 in the backlog). The
+  `classifyCommand` enum (`test|build|lint|git|pkg|run|read-cmd|other`, implemented in
+  `transcript.ts`, used in-memory by `no-verify` and `tools-over-bash`) is genuinely
+  content-free by construction, so the privacy question was never the problem. The
+  problems are that it has no consumer, and that the `events` table is the wrong store:
+  hook events fold **subagent** tool calls into the parent session while the rules read
+  main-chain-only transcript data. The "admin hygiene aggregates" justification is struck —
+  that dashboard is out of scope per CLAUDE.md. If a measured cross-session rule ever needs
+  this, the right shape is a per-session aggregate written from the transcript, not a
+  per-event field.
 - **2b — UserPromptSubmit hook**: emit `type: "prompt"` events (already in the schema enum) for cadence only — no new field. Prompt char *length* could follow as a bounded number if a concrete rule ever needs it; none does today, and vague-prompt coaching (M5) is deliberately not planned.
 - **2c — CLAUDE.md byte stat**: `stat` the fixed filename in the session cwd at SessionStart; store as a **local-only** `sessions.claude_md_bytes` column, never added to the sync wire schema. Unlocks a `claude-md-missing` tip (fired only alongside observed `reread-churn` waste, so it's tied to a real cost) and a mechanism line for `context-tax`.
 

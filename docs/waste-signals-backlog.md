@@ -20,7 +20,58 @@ metadata-only.
 | S5 | **Whole-file rewrite churn** — repeated `Write` to the same existing file instead of targeted `Edit` | Regenerating a whole file pays full output price for every unchanged line; Anthropic: surgical edits | ≥3 `Write` calls to the same target-hash in one session | ~~`surgical-edits`~~ | **dropped** — measured, see below |
 | S6 | **Scattered tool failures** — high failure rate without consecutive runs | Each failed call pays a full round trip + error output + recovery turn; scattered failures signal a broken environment (missing dep, wrong cwd) that one fix would end. `retry-loop` only catches *consecutive* identical failures | `tool_fails / tool_calls ≥ 25%` with ≥12 calls in a session (both already on the session row) | new tip `fix-env-once` | **backlog** — unblocked, needs calibration data (see note) |
 | S7 | **Marathon session** — one session spanning many hours / topics | Kitchen-sink sessions (taxonomy M1): every unrelated task pays for all the previous ones; `/clear` is free | Wall-clock span of the session's `events` rows ≥4h with ≥2 distinct activity bursts (gaps >30 min) — pure timestamps, no content | ~~`clear-between-tasks`~~ (stays a wisdom tip) | **dropped** — measured, see below |
-| S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Unlocks cross-session verify-habit rules and admin hygiene aggregates | Persist the existing closed `classifyCommand` enum onto `tool_use` events; closed enum → structurally content-free. Breaking design change: must update `privacy.test.ts` + server `ingest-privacy` suite | — (infrastructure) | **backlog** |
+| S8 | **Persist `cmd_class`** (taxonomy 2a — enabler, not a tip) | Would unlock a cross-session verify-habit rule | Measured before building; the enum is content-free but the `events` table is the wrong store — see below | — (infrastructure) | **deferred** — no consumer, wrong store |
+
+## Deferred — enablers without a consumer
+
+- **S8 — persist `cmd_class`.** Measured against 53 local transcripts and the
+  9-day event history before building. The privacy question was never the
+  problem: the enum is closed and `privacy.test.ts` already proves hostile
+  commands can't escape it. Three other things are:
+  - **The `events` table measures a different population than the rules do.**
+    Hook events fold **subagent** tool calls into the *parent* `session_id`,
+    while the parent transcript holds no sidechain entries at all (subagent
+    transcripts live in `<session-id>/subagents/`). One local session
+    reconciles exactly: 26 Bash events = **1** main-chain call + **25**
+    subagent calls. A persisted per-event `cmd_class` would credit the agent's
+    `bun test` to the user's verify habit. The launcher's silent exit-0 on a
+    missing binary makes the table lossy the other way too, so 8 of 9 sessions
+    disagree with their transcript — in both directions, by up to 6×.
+    `no-verify` and `tools-over-bash` read the transcript precisely because it
+    is the complete, main-chain-accurate record.
+  - **The one live justification has no rule behind it.** Of 10 sessions in
+    `no-verify`'s population (≥4 edits, ≥1 Bash), 8 ran 5–30 verify commands
+    and 2 ran none — and `no-verify` already fires on those 2 at a 10k
+    estimate. A cross-session variant would re-serve dismissed advice under a
+    new id, which is why S7 was dropped. The `shouldSuppressPlanMode` analogue
+    doesn't transfer: `no-verify` needs *zero* in-session verifies, so a
+    habitual verifier can't trigger it and there's no false positive to
+    suppress. "Admin hygiene aggregates" is struck — that dashboard is out of
+    scope per CLAUDE.md.
+  - **Nothing is lost by waiting.** Unlike `tool_fails` (unobservable until the
+    `PostToolUseFailure` fix) or `claude_md_bytes` (a point-in-time `stat`),
+    verify counts are re-derivable from transcripts retroactively — the whole
+    history above was reconstructed that way — and host retention comfortably
+    exceeds `analyzeHabits`' 7-day window.
+
+  What unblocks it: a *measured* cross-session rule that needs it. The right
+  shape then is a per-session aggregate (`sessions.verify_calls`, written from
+  the main-chain transcript like `used_plan_mode`, read straight by
+  `analyzeHabits`) — ~47 rows instead of ~2,158, a count instead of a per-call
+  trail, `SessionEventSchema` untouched. Ship it with its rule, the way every
+  other session column landed.
+
+## Known: hook counters and transcript rules count different things
+
+`sessions.tool_calls` / `tool_fails` are incremented from hook events, which
+**include subagent tool calls**, while `plan-mode`, `subagent-offload` and
+`reread-churn` read main-chain-only transcript calls. So `/remy`'s "N calls"
+and the adaptive payload's fail rate are inflated by delegated work on
+subagent-heavy sessions (one local session: 98 of 331 Bash calls were the
+agent's). Defensible as-is — the session *did* make those calls — but two
+numbers in the same UI currently count different populations. Changing it
+changes user-visible reported numbers, so it wants a deliberate decision
+rather than a silent fix.
 
 ## S6 is unblocked but not yet calibratable
 
