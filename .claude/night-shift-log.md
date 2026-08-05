@@ -113,3 +113,30 @@ regression today; what is missing is only the harness's proof that the suite wou
 Also worth knowing from the same run: the harness reported "2 uncommitted change(s) are
 NOT under test" — the developer's own working-tree edits to `package.json` and
 `scripts/mutation.ts` (which adds two new mutation entries, both of which passed).
+
+
+## 2026-08-06 02:10 — verification cycle, nothing to fix
+
+Two investigations, one clean bill, no code change.
+
+**Background sessions: a real concern with no measured impact, so not fixed.**
+Transcripts carry `sessionKind` and `entrypoint`. Locally: one session is entirely
+`sessionKind:"bg"` (608 entries), and entrypoints split `cli` 13,781 / `claude-desktop`
+1,727 / `sdk-cli` 55. REMY does not distinguish any of them, so in principle a session the
+developer never drove could file a tip and take the single active slot — the delivery
+objection that killed F6, G2 and M16. Checked the live DB: that bg session has a row
+(122k output, 181 tool calls) and has filed **zero** tips. Its tokens do land in the 7-day
+totals, which is arguably correct — they were spent on the same account. Held to the same
+standard as the rejections above: real in principle, empty in practice, not shipped.
+
+**Full end-to-end verification after 22 commits.** `bun run preflight` green, including
+typecheck, the whole suite, and cross-compilation for all four release targets. Then drove
+the real binary against a real transcript: SessionStart rendered the splash, the statusline
+rendered model/context/git/dev-badge, SessionEnd ran the analysis and the subagent walk,
+and `/remy` printed six findings — including tonight's `read-in-slices` at ~700k, matching
+the figure measured when it was built.
+
+One thing the run makes visible rather than breaks: `/remy` showed `🧰 tools 0 calls`
+beside 740k output tokens, because tool counts come from hooks (which don't fire in a
+synthetic replay) while tokens come from the transcript. That is the population mismatch
+S10 and S14 describe, on screen, and it is the display decision still waiting on a human.
