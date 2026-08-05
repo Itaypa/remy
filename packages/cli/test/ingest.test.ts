@@ -136,3 +136,50 @@ describe("PermissionDenied ingest", () => {
     if (existsSync(log)) expect(readFileSync(log, "utf8")).not.toContain(MARKER);
   });
 });
+
+describe("remy init", () => {
+  test("warns when the launcher path it writes lives in a temp directory", async () => {
+    // The path init writes is absolute and baked into a real project's
+    // settings.json. With REMY_HOME redirected — which is what the dogfood and
+    // driver workflows do — it points inside a temp dir that gets cleaned up,
+    // and the statusline then renders nothing AND says nothing, because the
+    // launcher exits 0 on every failure path. That silence cost a developer
+    // their statusline once already.
+    const project = mkdtempSync(join(tmpdir(), "remy-init-proj-"));
+    try {
+      const proc = Bun.spawn(["bun", CLI_ENTRY, "init"], {
+        cwd: project,
+        env: { ...process.env, REMY_HOME: dataDir, REMY_DATA_DIR: dataDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(out).toContain("temp directory");
+      // Still installs — warning, not refusal; the driver depends on this.
+      const written = JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf8"));
+      expect(written.statusLine.command).toContain("statusline");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("stays quiet when the launcher lives somewhere durable", async () => {
+    const project = mkdtempSync(join(tmpdir(), "remy-init-proj-"));
+    const durable = join(process.env.HOME!, ".remy-init-probe");
+    try {
+      const proc = Bun.spawn(["bun", CLI_ENTRY, "init"], {
+        cwd: project,
+        env: { ...process.env, REMY_HOME: durable, REMY_DATA_DIR: dataDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(out).not.toContain("temp directory");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(durable, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   activeTip,
   analyzeHabits,
@@ -814,10 +814,11 @@ function init(args: string[]): void {
     string,
     unknown
   >;
+  const launcher = launcherPath();
   settings.statusLine = {
     ...existing,
     type: "command",
-    command: `"${launcherPath()}" statusline`,
+    command: `"${launcher}" statusline`,
     // Event-driven repaints alone leave the statusline frozen for the
     // length of a tool run or a quiet thinking block — this is what makes
     // the loading-screen tip actually redraw while Claude is generating.
@@ -835,6 +836,34 @@ function init(args: string[]): void {
       "Restart Claude Code (or /statusline) to see it.",
     ].join("\n"),
   );
+  // The written command is an absolute path baked into a real project's
+  // settings. If REMY_HOME was redirected — which is exactly what the dogfood
+  // and driver workflows do — that path points inside a temp directory that
+  // gets cleaned up, and from then on the statusline renders NOTHING: the
+  // launcher exits 0 on every failure by design, so there is no error to see.
+  // This has cost a developer their statusline once already.
+  if (isTemporary(launcher)) {
+    console.log(
+      [
+        "",
+        `⚠️  that path is inside the system temp directory, so it will be cleaned up.`,
+        `   When it goes, the statusline renders nothing and says nothing — the`,
+        `   launcher exits 0 on every failure path.`,
+        `   REMY_HOME is probably redirected; re-run \`remy init\` without it.`,
+      ].join("\n"),
+    );
+  }
+}
+
+/** Is this path inside the OS temp directory? Compared through realpath so
+ * macOS's /var → /private/var symlink doesn't hide the answer. */
+function isTemporary(path: string): boolean {
+  try {
+    const tmp = realpathSync(tmpdir());
+    return realpathSync(dirname(path)).startsWith(tmp);
+  } catch {
+    return false;
+  }
 }
 
 /** A stable path for anything that outlives a single version — the
