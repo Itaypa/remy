@@ -148,3 +148,103 @@ describe("skill pack storage", () => {
     expect(getSession(db, "s1")!.skill_count).toBe(35);
   });
 });
+
+describe("skill pack probe — plugin resolution", () => {
+  /** A home shaped like the host's: settings.json declaring which plugins are
+   * enabled, and installed_plugins.json saying where each one lives. */
+  function fakeHome(opts: {
+    enabled: Record<string, boolean>;
+    installs: Record<string, string[]>;
+  }): string {
+    const home = join(tmpdir(), `remy-home-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(home, ".claude", "plugins"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: opts.enabled }));
+    const plugins: Record<string, Array<{ installPath: string }>> = {};
+    for (const [key, paths] of Object.entries(opts.installs)) {
+      plugins[key] = paths.map((p) => ({ installPath: p }));
+    }
+    writeFileSync(
+      join(home, ".claude", "plugins", "installed_plugins.json"),
+      JSON.stringify({ version: 2, plugins }),
+    );
+    return home;
+  }
+
+  test("a plugin that is installed but DISABLED contributes nothing", () => {
+    // The single worst error this probe could make: billing someone for skills
+    // they already turned off. The guard is one line in enabledPluginRoots,
+    // and before this test it could be deleted with the whole suite still green.
+    const on = scratch();
+    const off = scratch();
+    try {
+      writeSkill(on, "kept", "name: kept\ndescription: from an enabled plugin");
+      writeSkill(off, "gone", "name: gone\ndescription: from a plugin the user disabled");
+      const home = fakeHome({
+        enabled: { "on@market": true, "off@market": false },
+        installs: { "on@market": [join(on, ".claude")], "off@market": [join(off, ".claude")] },
+      });
+      try {
+        const { bytes, count } = skillPackBytes(join(tmpdir(), "remy-no-project"), home);
+        expect(count).toBe(1);
+        expect(bytes).toBe("kept".length + "from an enabled plugin".length);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(on, { recursive: true, force: true });
+      rmSync(off, { recursive: true, force: true });
+    }
+  });
+
+  test("a plugin absent from enabledPlugins still counts — only an explicit false disables", () => {
+    // Defaulting the other way would silently measure nothing on any host that
+    // doesn't write the map.
+    const root = scratch();
+    try {
+      writeSkill(root, "alpha", "name: alpha\ndescription: no entry in the map");
+      const home = fakeHome({ enabled: {}, installs: { "alpha@market": [join(root, ".claude")] } });
+      try {
+        expect(skillPackBytes(join(tmpdir(), "remy-no-project"), home).count).toBe(1);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("one plugin installed at two paths is counted once", () => {
+    // Plugins live on disk under both a version directory and a hash directory.
+    // Counting both double-bills the user for one loaded skill.
+    const v1 = scratch();
+    const v2 = scratch();
+    try {
+      writeSkill(v1, "dup", "name: dup\ndescription: same skill, two install paths");
+      writeSkill(v2, "dup", "name: dup\ndescription: same skill, two install paths");
+      const home = fakeHome({
+        enabled: { "p@market": true },
+        installs: { "p@market": [join(v1, ".claude"), join(v2, ".claude")] },
+      });
+      try {
+        expect(skillPackBytes(join(tmpdir(), "remy-no-project"), home).count).toBe(1);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(v1, { recursive: true, force: true });
+      rmSync(v2, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed settings.json or install manifest means no plugins, not a throw", () => {
+    const home = join(tmpdir(), `remy-home-bad-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(home, ".claude", "plugins"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), "{ not json");
+    writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), "[]");
+    try {
+      expect(skillPackBytes(join(tmpdir(), "remy-no-project"), home)).toEqual({ bytes: 0, count: 0 });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
