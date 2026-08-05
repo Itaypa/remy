@@ -14,6 +14,8 @@ import {
   setClaudeMdBytes,
   skillPackBytes,
   setSkillPack,
+  readSubagentStats,
+  setSubagentStats,
   parseAdaptOutput,
   contextFromPayload,
   binDir,
@@ -332,6 +334,11 @@ async function analyzeTranscript(
   const limit = getSession(db, sessionId)?.context_window ?? contextLimit();
   const stats = await parseTranscriptFile(transcriptPath, limit);
   if (!stats) return;
+  // What the workers spent, on SessionEnd only. Stop fires every turn and this
+  // walks a directory and reads every worker transcript in it — one local
+  // session is 4.0MB across 22 files, which would blow the hook budget many
+  // times over. Once per session is enough for a number nothing renders yet.
+  if (sessionEnd) setSubagentStats(db, sessionId, readSubagentStats(transcriptPath, sessionId));
   db.query(
     `UPDATE sessions SET
        tokens_in = ?, tokens_out = ?, cache_read = ?, cache_write = ?,

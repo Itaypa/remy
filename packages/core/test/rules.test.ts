@@ -66,6 +66,12 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     claude_md_bytes: null,
     skill_bytes: null,
     skill_count: null,
+    sub_agents: null,
+    sub_tokens_in: null,
+    sub_tokens_out: null,
+    sub_cache_write: null,
+    sub_tools: null,
+    sub_model: null,
     perm_denials: 0,
     ...overrides,
   };

@@ -145,6 +145,17 @@ function migrate(db: Database): void {
   // ship ahead of the rule that will read them.
   addColumnIfMissing(db, "sessions", "skill_bytes", "skill_bytes INTEGER");
   addColumnIfMissing(db, "sessions", "skill_count", "skill_count INTEGER");
+  // What the delegated workers spent (see subagents.ts). Kept SEPARATE from
+  // tokens_in/tokens_out on purpose: every threshold in rules.ts was calibrated
+  // against main-chain-only numbers, so folding these in would move all of them
+  // at once and invisibly. NULL = no subagents/ directory (older host, or never
+  // walked); 0 = walked and the session delegated nothing.
+  addColumnIfMissing(db, "sessions", "sub_agents", "sub_agents INTEGER");
+  addColumnIfMissing(db, "sessions", "sub_tokens_in", "sub_tokens_in INTEGER");
+  addColumnIfMissing(db, "sessions", "sub_tokens_out", "sub_tokens_out INTEGER");
+  addColumnIfMissing(db, "sessions", "sub_cache_write", "sub_cache_write INTEGER");
+  addColumnIfMissing(db, "sessions", "sub_tools", "sub_tools INTEGER");
+  addColumnIfMissing(db, "sessions", "sub_model", "sub_model TEXT");
   // Tool calls denied by the host's auto-mode classifier (the PermissionDenied
   // hook). Defaults to 0 rather than NULL, so rows written before this shipped
   // are indistinguishable from genuinely denial-free ones — any future *rate*
@@ -238,6 +249,14 @@ export interface SessionRow {
    * distinct skills that is (local-only). NULL = never probed, 0 = none. */
   skill_bytes: number | null;
   skill_count: number | null;
+  /** What the delegated workers spent (subagents.ts), local-only and kept out
+   * of the main totals on purpose. NULL = never walked, 0 = walked and none. */
+  sub_agents: number | null;
+  sub_tokens_in: number | null;
+  sub_tokens_out: number | null;
+  sub_cache_write: number | null;
+  sub_tools: number | null;
+  sub_model: string | null;
   /** Tool calls denied by the host's auto-mode classifier (local-only). */
   perm_denials: number;
 }
@@ -328,6 +347,30 @@ export function setSkillPack(db: Database, sessionId: string, pack: unknown): vo
     ok ? count : null,
     sessionId,
   );
+}
+
+/** Record what this session's delegated workers spent. Same coercion contract
+ * as its siblings — the INTEGER affinity would store a string happily, so this
+ * is what keeps the columns numeric — plus `ModelStr` on the one string, which
+ * comes out of a file we don't control. All-or-nothing: a partial row here
+ * would be a spend figure with no agent count to explain it. */
+export function setSubagentStats(db: Database, sessionId: string, s: unknown): void {
+  const whole = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
+  const st = s as Record<string, unknown> | null;
+  const vals = [
+    whole(st?.agents),
+    whole(st?.tokensIn),
+    whole(st?.tokensOut),
+    whole(st?.cacheWrite),
+    whole(st?.tools),
+  ];
+  const ok = vals.every((v) => v !== null);
+  const model = ok ? (ModelStr.safeParse(st?.topModel).data ?? null) : null;
+  db.query(
+    `UPDATE sessions SET sub_agents = ?, sub_tokens_in = ?, sub_tokens_out = ?,
+       sub_cache_write = ?, sub_tools = ?, sub_model = ? WHERE session_id = ?`,
+  ).run(...(ok ? vals : [null, null, null, null, null]), model, sessionId);
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {
