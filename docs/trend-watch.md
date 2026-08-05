@@ -117,3 +117,80 @@ outright reject. Both moved.
 - **F6 rejected on delivery, not measurement.** A scheduled run *is* a session, so REMY
   would attribute it to the developer and coach them for what a cron did — and all four
   coaching channels render to a screen nobody is watching. Zero instances locally.
+
+---
+
+## 2026-08-06 — sweep 2
+
+Deliberately new ground: sweep 1 covered MCP surface, model choice, compaction,
+extended thinking, skills and scheduled tasks, so none of those were searched again.
+
+Sources, by type:
+
+- **Practitioner measurement** — [The subagent tax](https://systima.ai/blog/subagent-tax)
+  (a logging-proxy study running identical tasks sequentially vs 2 vs 5 subagents),
+  [Why Claude Code subagents burn so many tokens](https://youcanbuildthings.com/articles/claude-code-subagents-token-usage/),
+  [the 887k-tokens/min subagent cost explosion](https://www.aicosts.ai/blog/claude-code-subagent-cost-explosion-887k-tokens-minute-crisis).
+- **Community friction** — `anthropics/claude-code` issues
+  [#35166](https://github.com/anthropics/claude-code/issues/35166) (infinite loop
+  re-sending a request every minute for hours, $500+),
+  [#57535](https://github.com/anthropics/claude-code/issues/57535) (stuck re-running
+  tsc from the wrong directory), [#41666](https://github.com/anthropics/claude-code/issues/41666)
+  (a documented hook example causing silent repeat token waste).
+- **Anthropic's own surface** — the per-session subagent cap
+  (`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`, default 200) shipped explicitly "to stop
+  runaway delegation loops", and the docs' "agent teams use ~7× tokens".
+- **Workflow guidance** — [worktrees for parallel sessions](https://code.claude.com/docs/en/worktrees).
+
+### Findings
+
+| # | The mistake, in one line | Claimed cost | Metadata-detectable? | Verdict |
+|---|---|---|---|---|
+| G1 | **The subagent tax** — every worker is a fresh agent loop re-reading its own ~4k system prompt and ~24 tool schemas on every turn, and parallel spawns hit cold caches at premium write rates | 2 subagents = 2.6× metered input tokens on Opus (~5× price-weighted), 5.9× on Fable, 4.2× on Sonnet — and **never faster on any task**. Not worth it for small tasks, sequential dependencies, or review steps | Yes, but not where we look — see the ground-truth note below | **spec'd — S14** |
+| G2 | **Runaway / repeated-request loops** — the same call re-issued indefinitely, `retry-loop` only catches consecutive identical *failures* | $500+ over hours in the reported case | Measured locally: max identical-command repeats in one session = **9**, over 157h; zero cases of a command re-run 3× with no intervening edit. `retry-loop` fires 0 times locally | **rejected** — see below |
+| G3 | **Parallel-session collision** — a subagent reads files another session is mid-edit in, then cites line numbers that have shifted | hallucinated code, silent rework | Exposure is computable (`cwd_hash` + timestamps: 8.6% of active minutes locally have ≥2 live sessions) — the *harm* is not | **rejected** — see below |
+| — | Fabricated test results; instructions inconsistently followed | — | Requires reading prompt/code content | **out of scope — content-dependent** |
+
+### Ground truth that moved — and it invalidates code we ship
+
+**`isSidechain` is dead on this host.** All **14,858** entries across the 27 local main
+transcripts are `isSidechain:false`; the 44 files carrying `true` are the subagent
+transcripts themselves, which now live in a separate tree:
+`~/.claude/projects/<proj>/<session-id>/subagents/agent-<id>.jsonl` plus a `.meta.json`
+carrying `{agentType, description, toolUseId, spawnDepth, model}`. The sidechain
+exclusions in `transcript.ts` therefore never fire, and **subagent spend is not in
+REMY's token totals in any form.**
+
+Measured consequences:
+
+- **15.1% of all local billable tokens are invisible to REMY** (3.34M subagent against
+  18.74M main). Median 13.4% per session that used subagents; worst session **55.7%**,
+  where REMY reported roughly half of what actually ran.
+- The three numbers REMY shows count three different populations: `tool_calls` comes
+  from hooks and **does** include subagent calls (832 stored vs 586 main + 256 subagent
+  on one session), tokens come from the transcript parse and **don't**, and `cost_usd`
+  comes from the host and **does**. This is S10, but larger than S10 described.
+- Per agent: billable p25/p50/p75/max = 49k / 69k / 104k / 213k. The median agent spends
+  ~69k to hand back ~2.4k of report — roughly **31×**.
+- **Worker tier is inherited, not chosen:** of 44 local agents, `meta.model` is unset on
+  24; of those with a tier, 18 are Opus and 2 Fable. `spawnDepth` is 1 on all 44, so
+  nested-agent file placement is **unverified** — a depth-2 agent might not land in the
+  same directory, which would undercount.
+
+### Verdict notes — from the council
+
+- **G2 rejected on measurement, not on principle.** The reported loops are real, but the
+  local population is empty: across 1,623 Bash calls in 13 sessions the worst identical-
+  command repeat was 9 over 157 hours, and widening `retry-loop` to successful repeats
+  would pull in legitimate polling (204 browser calls at a 58s cadence, 20-long task-update
+  runs). The reported case was also a *host* bug, and a runaway loop burns while nobody is
+  watching the statusline — the same delivery objection that killed F6 in sweep 1.
+- **G3 rejected — we can detect the exposure, never the harm.** Overlap is easy arithmetic
+  and the local numbers are real (8.6% of active minutes have ≥2 live sessions, four
+  sessions spend 38–68% of their minutes overlapping). But a read-after-write across
+  sessions is not evidence anything went wrong, the harm is content, and the false-positive
+  class *is* the intended workflow — a background research agent, a read-only second
+  session, and this repo's own night-shift loop are indistinguishable from a collision.
+  REMY would coach its own author for something he does deliberately every night. Its fix
+  ("a worktree per code-writing agent") also has no metadata signature, so the tip could
+  never be observed to have worked, and would re-fire forever. Demoted to a hints-deck line.
