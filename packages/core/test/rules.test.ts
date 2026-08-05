@@ -262,6 +262,31 @@ describe("waste signatures", () => {
     expect(fewEdits.some((x) => x.tipId === "no-verify")).toBe(false);
   });
 
+  test("test, build AND lint each count as verification on their own", () => {
+    // Only `test` was ever exercised, so dropping "build" or "lint" from
+    // VERIFY_CLASSES broke nothing — and the failure mode is the bad one: the
+    // tip would start telling people who DID verify that they shipped edits
+    // unverified. A wrong tip is worse than silence.
+    const edits = Array.from({ length: 4 }, () => call("Edit"));
+    for (const cls of ["test", "build", "lint"] as const) {
+      const findings = analyzeSession(snapshot({ toolCalls: [...edits, bash(cls)], editCalls: 4 }));
+      expect(
+        findings.some((x) => x.tipId === "no-verify"),
+        `${cls} should count as a verification run`,
+      ).toBe(false);
+    }
+
+    // And a shell class that is NOT verification leaves the tip firing, so the
+    // test above is proving the membership rather than the edit count.
+    for (const cls of ["git", "pkg", "run", "read-cmd", "other"] as const) {
+      const findings = analyzeSession(snapshot({ toolCalls: [...edits, bash(cls)], editCalls: 4 }));
+      expect(
+        findings.some((x) => x.tipId === "no-verify"),
+        `${cls} is not verification and should not silence the tip`,
+      ).toBe(true);
+    }
+  });
+
   test("tools-over-bash fires on a habit of shell reads, not on a few", () => {
     const yes = analyzeSession(snapshot({ toolCalls: Array.from({ length: 6 }, () => bash("read-cmd")) }));
     const f = yes.find((x) => x.tipId === "tools-over-bash");
