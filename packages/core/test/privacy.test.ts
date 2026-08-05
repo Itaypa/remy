@@ -14,6 +14,8 @@ import {
   claudeMdBytes,
   setClaudeMdBytes,
   getSession,
+  setSkillPack,
+  setSubagentStats,
 } from "../src/index";
 
 const MARKER = "SUPER_SECRET_PROMPT_BODY_should_never_be_stored";
@@ -288,5 +290,68 @@ describe("privacy gate", () => {
     });
     expect(JSON.stringify(ctx)).not.toContain(MARKER);
     expect(JSON.stringify(ctx)).not.toContain("/Users");
+  });
+
+  test("nothing body-like survives a full write to the SESSIONS row either", () => {
+    // The test above covers `events` and one writer. Every probe result and
+    // every host-supplied field lands in `sessions` instead, through writers
+    // that do NOT go through sanitizeEvent — which is how the model column
+    // came to hold values the schema forbade. This drives all of them at once
+    // with a hostile value and looks at the whole row.
+    const db = openDb(":memory:");
+    const hostile = `/Users/x/${MARKER}`;
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:00:00.000Z", model: hostile, cwd_hash: hostile });
+    setClaudeMdBytes(db, "s1", hostile);
+    setSkillPack(db, "s1", { bytes: hostile, count: hostile });
+    setSubagentStats(db, "s1", { agents: hostile, tokensIn: hostile, tokensOut: hostile, cacheWrite: hostile, tools: hostile, topModel: hostile });
+
+    const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
+    expect(dump).not.toContain(MARKER);
+    expect(dump).not.toContain("/Users");
+  });
+
+  test("no table grows a free-text column without this test being updated", () => {
+    // "Widening this schema is a design change" is the rule; this is what makes
+    // it one. Every TEXT column is listed with what constrains it, so adding a
+    // column that could hold a prompt, a path or a file body fails here rather
+    // than shipping quietly. INTEGER/REAL columns are covered by the coercion
+    // tests above — SQLite affinity would happily store a string in them, so
+    // the write-site coercion is the guarantee, not the declared type.
+    const REVIEWED: Record<string, Record<string, string>> = {
+      sessions: {
+        session_id: "IdStr — charset-gated, no slash",
+        started_at: "ISO timestamp",
+        ended_at: "ISO timestamp",
+        model: "ModelStr — charset-gated at the write site",
+        cwd_hash: "Hash16 — one-way, gated at the write site",
+        repo_hash: "vestigial; no writer, kept for shape compatibility",
+        sub_model: "ModelStr — charset-gated at the write site",
+      },
+      events: {
+        session_id: "IdStr", ts: "ISO timestamp", host: "HostStr enum-shaped",
+        host_version: "HostVersionStr", type: "EventType enum", model: "ModelStr",
+        tool_name: "ToolNameStr", target_hash: "Hash16",
+        compact_trigger: "auto|manual enum", repo_hash: "vestigial", cwd_hash: "Hash16",
+      },
+      tips: {
+        tip_id: "catalog id", session_id: "IdStr", created_at: "ISO timestamp",
+        status: "queued|active|dismissed enum",
+        evidence: "rule-authored JSON of numbers and closed-set strings",
+        why: "the adaptive analyzer's own sentence, length-capped and sanitized (adapt.ts)",
+      },
+      sync_state: { key: "local kv key", value: "local kv value" },
+    };
+
+    const db = openDb(":memory:");
+    for (const [table, reviewed] of Object.entries(REVIEWED)) {
+      const cols = (db as Database).query(`PRAGMA table_info(${table})`).all() as Array<{
+        name: string;
+        type: string;
+      }>;
+      const text = cols.filter((c) => c.type === "TEXT").map((c) => c.name);
+      expect(text.sort(), `${table} gained or lost a TEXT column — justify it here`).toEqual(
+        Object.keys(reviewed).sort(),
+      );
+    }
   });
 });
