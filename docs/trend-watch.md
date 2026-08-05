@@ -333,3 +333,72 @@ destructive git command (`reset --hard`, `checkout --`, `clean -fd`) against the
 own cwd *after* N edits would make the estimate a real number: the tokens already spent
 producing the discarded work, which `spendTokens` already holds. That is `cache-idle`'s
 shape rather than a warning about a state. Population today: zero.
+
+---
+
+## 2026-08-06 — sweep 5
+
+One finding, rejected as a detector, and two real defects it exposed on the way.
+
+**K1 — resuming a session invalidates the prompt cache.**
+[anthropics/claude-code#42338](https://github.com/anthropics/claude-code/issues/42338):
+`--continue` invalidates the entire prompt cache, forcing a 400–500k `cache_creation`
+**even when re-entering within seconds**.
+[#38029](https://github.com/anthropics/claude-code/issues/38029): a resumed session reached
+80% of plan usage with no user input. Anthropic's mitigation, shipped Q1 2026, is the
+"resume from a summary" offer on large sessions.
+
+**Rejected as a detector, on measurement.** Confirmed resumes locally: 7, across 5 of 46
+sessions. Exactly **one** produced a cold re-write — `254bf5e2`, where a `<synthetic>`
+marker at 07:23:59.897Z matches the DB's second `session_start` hook to 89 ms, followed by
+a 321k re-write. That is n=1 in 4,118 short-gap turn pairs, the same bar that killed F6,
+G2 and M16. And reaching it would cost more than it buys: of the five sub-30-minute fat
+re-writes in the corpus, four are tool-list or system-prompt drift, which
+`transcript.ts` explicitly says must not be blamed on stepping away — so loosening the gap
+requirement to catch the one resume would admit four misattributions.
+
+Also rejected: **storing the SessionStart `source`**. The enum is real
+(`startup` · `resume` · `fork` · `clear` · `compact`, confirmed in the shipped binary) and
+would pass the charset gate, but a session has several sources over its life, so it
+belongs on the event rather than the session row — a whitelist widening, i.e. a design
+change, to reword one tip on 1 firing in 15. A repeat `session_start` row already carries
+the same fact for free.
+
+And the **S12 attribution move does not transfer**. Teaching `cache-idle` to say "this was
+a resume, not a coffee break" would be right 1 time in 15. S12 worked because the skill
+pack is always there; naming a cause you get wrong 93% of the time is worse than silence.
+
+### What the sweep exposed instead
+
+1. **REMY was recommending the thing this finding bills at 400k.** The hints deck carried
+   *"--resume picks up where you left off — cache-warm and cheaper."* That is factually
+   false per #42338 and is now corrected. A shipped falsehood in our own copy is a worse
+   defect than a missing detector.
+2. **Host bookkeeping was poisoning `detectCacheExpiry`.** `<synthetic>` and zero-usage
+   turns sat in the walk, so one landing inside an idle gap split it into two
+   sub-threshold halves, and `<synthetic>` as `prev.model` tripped the model-switch guard.
+   Measured independently: **15 firings over 5.48M tokens becomes 17 over 6.00M (+9.4%)**,
+   nothing lost, and two previously silent sessions become coached — one across a
+   1,361-minute gap.
+
+### F9 closed: 30 minutes is the right threshold
+
+Sweep 1 left "Anthropic's own flag is share-of-usage, ours is a 30-minute gap — worth a
+calibration pass someday." Measured now, over consecutive real-turn pairs:
+
+| gap | pairs | re-wrote |
+|---|---|---|
+| <1 min | 3,872 | 0 (0.0%) |
+| 1–10 min | 246 | 5 (2.0%) |
+| 10–45 min | 28 | **0 (0.0%)** |
+| 45–60 min | 6 | 1 |
+| 1–6 h | 11 | 7 |
+| >6 h | 12 | **12 (100%)** |
+
+The real TTL is about an hour. There is **zero** population between 30 and 45 minutes to
+gain by lowering the threshold, and the only sub-30-minute re-writes are cache-busting
+drift rather than idleness. `CACHE_EXPIRY_MIN_GAP_MS` stays at 30 minutes; the question is
+settled, not deferred.
+
+**Revisit trigger for K1:** a corpus where ≥3 sessions show a `session_start` inside a
+sub-30-minute gap preceding a ≥100k re-write. Until then it lives in the hints deck.

@@ -397,6 +397,25 @@ describe("cache-expiry detection (timestamp-verified idle gaps that re-wrote a f
     expect(stats.model).toBe("claude-opus-5");
   });
 
+  test("a synthetic turn inside an idle gap does not split it in two", () => {
+    // The host writes a zero-usage `<synthetic>` turn (a resume marker, an API
+    // error) into the main chain. Landing inside a long gap, it used to break
+    // one 60-minute idle into two 30-minute halves, so the expiry went unseen —
+    // and as `prev.model` it also tripped the model-switch guard. Measured on
+    // the real corpus, excluding these turns found two more expiries worth
+    // 517k tokens, including one across a 1,361-minute gap.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "m1", atMin: 0, usage: { input_tokens: 2_000, cache_read_input_tokens: 140_000 } }),
+        assistantLine({ id: "syn", atMin: 40, model: "<synthetic>", usage: { output_tokens: 0 } }),
+        assistantLine({ id: "m2", atMin: 80, usage: { input_tokens: 2_000, cache_creation_input_tokens: 150_000 } }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.cacheExpiries).toBe(1);
+    expect(stats.cacheExpiryWorstGapMinutes).toBe(80);
+  });
+
   test("a model switch re-writes legitimately — excluded even across a gap", () => {
     const stats = parseTranscript(
       [

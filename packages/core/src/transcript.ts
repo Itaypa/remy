@@ -382,10 +382,20 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   let cacheExpiries = 0;
   let cacheExpiryTokens = 0;
   let cacheExpiryWorstGapMinutes = 0;
-  for (let i = 1; i < mainTurns.length; i++) {
-    const t = mainTurns[i]!;
+  // Host bookkeeping is not a request, and leaving it in this walk did two
+  // kinds of damage. A `<synthetic>` or zero-usage turn landing inside an idle
+  // gap split one long gap into two sub-threshold halves, so the expiry went
+  // unseen; and `<synthetic>` standing in as `prev.model` tripped the
+  // model-switch guard below, skipping the turn outright. `dominantModel`
+  // already excludes these turns — this walk did not.
+  // Measured on the local corpus: 15 firings over 5.48M tokens becomes 17 over
+  // 6.00M (+9.4%), with nothing lost, and two sessions that were silent — one
+  // with a 1,361-minute gap — become coached.
+  const cacheTurns = mainTurns.filter((t) => t.model !== SYNTHETIC_MODEL && contextOf(t.usage) > 0);
+  for (let i = 1; i < cacheTurns.length; i++) {
+    const t = cacheTurns[i]!;
     if (t.afterCompact) continue;
-    const prev = mainTurns[i - 1]!;
+    const prev = cacheTurns[i - 1]!;
     if (t.model && prev.model && t.model !== prev.model) continue;
     if (t.ts == null || prev.ts == null) continue;
     const gapMs = t.ts - prev.ts;

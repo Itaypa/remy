@@ -408,7 +408,7 @@ export const HINTS: string[] = [
   "🧹 /compact at a natural breakpoint beats auto-compact mid-flight.",
   "🔀 Subagents keep your main context clean during big searches.",
   "⎋ Esc interrupts — steer early instead of paying for the wrong path.",
-  "🗂 --resume picks up where you left off — cache-warm and cheaper.",
+  "🗂 --resume keeps your context, not your cache — a big session re-reads at full price.",
   "🔖 Checkpoints are a session buffer, not a backup — commit before a risky agent run.",
   '💬 "Once there is a good plan, it will one-shot the implementation." — Boris Cherny',
   '💬 Self-verification is "worth 2–3x on the quality of the final result." — Boris Cherny',
