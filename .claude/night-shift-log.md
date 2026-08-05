@@ -140,3 +140,29 @@ One thing the run makes visible rather than breaks: `/remy` showed `🧰 tools 0
 beside 740k output tokens, because tool counts come from hooks (which don't fire in a
 synthetic replay) while tokens come from the transcript. That is the population mismatch
 S10 and S14 describe, on screen, and it is the display decision still waiting on a human.
+
+
+## 2026-08-06 02:15 — S6 calibrated, and it is not what the row said
+
+The backlog listed S6 (`fix-env-once`, scattered tool failures) as **unblocked, needs
+calibration data**. It has the data now, and the row was wrong: it is blocked, and the
+clock only started on 2026-08-04.
+
+Measured across the live DB: 12 sessions have tool calls, 11 have ≥12. The highest failure
+rate in the corpus is **1.6%** (10 of 629). Every candidate threshold — 10%, 15%, 20%,
+25%, 30% — fires on **0 of 11**.
+
+**A wrong turn I caught before writing it down.** Comparing DB counts to transcripts looked
+alarming: `c469065c` records 0 failures while its transcript holds 11 `is_error` results,
+`5e00e0d7` 0 against 11, `5606c645` 0 against 10. That reads like the `PostToolUseFailure`
+hook not working, contradicting CLAUDE.md. Checking dates instead of writing it up: the
+handling landed 2026-08-04 in `bcbdafc`, and every session showing that gap started before
+it. The hook is fine — `b87b7ddb` (2026-08-05) records 10 failures and proves it fires.
+The zeros are pre-fix binaries, not a defect.
+
+One real observation survives, and it is S10's point again rather than a new bug:
+`b87b7ddb` records **10** hook-counted failures against only **2** `is_error` results in
+its main-chain transcript. Hooks count subagent failures; the transcript does not. Same
+population mismatch, now visible in the failure counter as well as the token counts.
+
+**Unpark condition for S6:** ≥10 sessions recorded after 2026-08-04. Today there is one.
