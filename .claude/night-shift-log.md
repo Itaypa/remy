@@ -81,3 +81,35 @@ The backlog is resolved, rung 1 is clean and re-verified, coverage is 95.9%
 with what remains being `ansi()`, `binDir()` and defensive catches, and rung 3's
 findings are recorded. Continuing would have meant adding marginal commits that
 make the ~8 that matter harder to find. Restart any time with `/night-shift`.
+
+
+---
+
+## 2026-08-06 01:15 — verification cycle, one item for a human
+
+**Mutation harness run against HEAD (`caf9457`): 35/37 caught, 1 accepted survivor,
+1 STALE entry.** The stale one is mine, and it is a one-line fix I could not make.
+
+`scripts/mutation.ts` pins `ModelStr`'s regex to defend "model ids are charset-gated, so
+no free text rides in on them". Tonight's first commit (`c67d4cd`) widened that regex to
+admit the bracket and angle forms the host actually emits (`claude-opus-5[1m]`,
+`<synthetic>`), so the entry's `from` string no longer matches anything and the harness
+skips it. The harness's own header says widening the whitelist means editing this catalog
+too — that is the step I owed and could not take, because `scripts/mutation.ts` is in the
+developer's uncommitted set and the night shift never stages their files.
+
+**What a human needs to do:** one line in `scripts/mutation.ts` — change the entry's
+`from` to the current regex:
+
+```
+export const ModelStr = z.string().min(1).max(80).regex(/^[\w.:<>\[\]-]+$/);
+```
+
+**How urgent it is — verified, not assumed:** the *invariant* is still covered. I removed
+the regex by hand and re-ran the privacy suite: 2 tests fail, including the
+`sessions.model` gate added in the same commit. So the suite would still catch a
+regression today; what is missing is only the harness's proof that the suite would.
+
+Also worth knowing from the same run: the harness reported "2 uncommitted change(s) are
+NOT under test" — the developer's own working-tree edits to `package.json` and
+`scripts/mutation.ts` (which adds two new mutation entries, both of which passed).
