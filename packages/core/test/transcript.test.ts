@@ -626,3 +626,56 @@ describe("parseTranscriptFile (the Stop-hook reader)", () => {
     expect(stats!.totals.in).toBe(1_000);
   });
 });
+
+describe("oversized tool results", () => {
+  const useLine = (id: string, name: string, path: string) =>
+    JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      message: {
+        id: `a-${id}`,
+        model: "claude-fable-5",
+        usage: { output_tokens: 1 },
+        content: [{ type: "tool_use", id, name, input: { file_path: path } }],
+      },
+    });
+  const resultLine = (id: string, chars: number) =>
+    JSON.stringify({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: "x".repeat(chars) }] },
+    });
+
+  test("counts Read results big enough to be whole files, and remembers the worst", () => {
+    const lines: string[] = [];
+    for (const [i, chars] of [40_000, 200_000, 36_000].entries()) {
+      lines.push(useLine(`t${i}`, "Read", `/src/f${i}.ts`), resultLine(`t${i}`, chars));
+    }
+    const stats = parseTranscript(lines.join("\n"), 200_000);
+    expect(stats.fatReads).toBe(3);
+    expect(stats.fatReadWorstTokens).toBe(50_000); // 200,000 chars / 4
+    expect(stats.fatReadTokens).toBe(10_000 + 50_000 + 9_000);
+  });
+
+  test("ordinary reads never count — the floor is well above normal use", () => {
+    // Local Read results sit around 2,200 characters; nothing that size should
+    // ever reach this rule.
+    const lines = [useLine("t1", "Read", "/src/small.ts"), resultLine("t1", 2_200)];
+    expect(parseTranscript(lines.join("\n"), 200_000).fatReads).toBe(0);
+  });
+
+  test("only Read counts — a huge browser result is an image, not a user's choice", () => {
+    const lines = [
+      useLine("t1", "mcp__Claude_Browser__computer", "https://example.com"),
+      resultLine("t1", 400_000),
+    ];
+    expect(parseTranscript(lines.join("\n"), 200_000).fatReads).toBe(0);
+  });
+
+  test("the result content never leaves the parser — only its length does", () => {
+    const marker = "SECRET-FILE-BODY";
+    const lines = [useLine("t1", "Read", "/src/f.ts"), resultLine("t1", 40_000).replace(/x{16}/, marker)];
+    const stats = parseTranscript(lines.join("\n"), 200_000);
+    expect(stats.fatReads).toBe(1);
+    expect(JSON.stringify(stats)).not.toContain(marker);
+  });
+});

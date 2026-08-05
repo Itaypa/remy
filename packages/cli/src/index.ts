@@ -372,6 +372,10 @@ async function analyzeTranscript(
     cacheExpiryWorstGapMinutes: stats.cacheExpiryWorstGapMinutes,
     redZoneTurns: stats.redZoneTurns,
     redZoneExcessTokens: stats.redZoneExcessTokens,
+    fatReads: stats.fatReads,
+    fatReadTokens: stats.fatReadTokens,
+    fatReadWorstTokens: stats.fatReadWorstTokens,
+    fatReadTargets: stats.fatReadTargets,
     // NULL when SessionStart never ran for this id (plugin installed
     // mid-session, or a --continue into an older session) — the rules read
     // that as "unknown" and stay quiet.

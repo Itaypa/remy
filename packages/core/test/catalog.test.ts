@@ -14,6 +14,7 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "no-verify": { edits: 25, bash_calls: 18 },
   "context-tax": { pct: 48, first_tokens: 96_000, skill_k: "~2.5k tokens" },
   "subagent-offload": { reads: 42, ctx_pct: 95 },
+  "read-in-slices": { count: 5, worst_k: 118 },
   "model-fit": { n: 12, tier: "opus" },
   "tools-over-bash": { count: 42 },
   "claude-md-missing": { files: 8, worst: 12 },

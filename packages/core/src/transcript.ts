@@ -37,6 +37,14 @@ export interface TranscriptStats {
   /** Tokens processed above the healthy 60% band across those turns — what
    * compacting at 60% would have avoided. */
   redZoneExcessTokens: number;
+  /** `Read` results big enough to be whole files rather than the slice that
+   * was asked for, the tokens they carried, and the worst single one. */
+  fatReads: number;
+  fatReadTokens: number;
+  fatReadWorstTokens: number;
+  /** Hashed targets of those reads, so the rules engine can tell a whole-file
+   * read apart from a file `reread-churn` is already billing. */
+  fatReadTargets: string[];
 }
 
 export interface ContextInfo {
@@ -61,6 +69,14 @@ const CACHE_EXPIRY_MIN_WRITE = 100_000;
  * (context rot). The healthy band tops out around 60% — the baseline the
  * excess is measured against. */
 const RED_ZONE_PCT = 0.8;
+/** Characters per token, for sizing a tool result. The same rough divisor the
+ * rules engine uses for CLAUDE.md and the skill pack — good enough to tell a
+ * slice from a whole file, which is the only question asked of it. */
+const BYTES_PER_TOKEN = 4;
+/** A single `Read` result this big is a whole file, not the part you asked
+ * for. Local `Read` results sit at a p50 of ~2,200 characters, so this is far
+ * above ordinary use, and far below the fat tail (p95 ~118k characters). */
+const FAT_READ_TOKENS = 8_000;
 const RED_ZONE_BASELINE_PCT = 0.6;
 
 export function contextLimit(): number {
@@ -217,6 +233,10 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   const toolById = new Map<string, ToolCall>();
   let model: string | null = null;
   let usedPlanMode = false;
+  let fatReads = 0;
+  let fatReadTokens = 0;
+  let fatReadWorstTokens = 0;
+  const fatReadTargetSet = new Set<string>();
   let contextNow: number | null = null;
   let firstContext: number | null = null;
   let assistantTurns = 0;
@@ -280,9 +300,31 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
       }
     } else if (entry?.type === "user" && Array.isArray(entry.message?.content)) {
       for (const block of entry.message.content) {
-        if (block?.type === "tool_result" && block.is_error === true) {
-          const call = toolById.get(block.tool_use_id);
+        if (block?.type !== "tool_result") continue;
+        const call = toolById.get(block.tool_use_id);
+        if (block.is_error === true) {
           if (call) call.ok = false;
+        }
+        // How big the result was — a number, never the result itself. A whole
+        // file arriving where a slice was asked for is the largest tool-shaped
+        // waste in the local corpus: `Read` results run to 471k characters,
+        // about 118k tokens, which the window then carries for every turn
+        // after. Scoped to Read on purpose; the browser MCP's results are
+        // base64 images, enormous and not a user's choice.
+        if (call?.name === "Read") {
+          const len =
+            typeof block.content === "string"
+              ? block.content.length
+              : block.content == null
+                ? 0
+                : JSON.stringify(block.content).length;
+          const tokens = Math.round(len / BYTES_PER_TOKEN);
+          if (tokens >= FAT_READ_TOKENS) {
+            fatReads += 1;
+            fatReadTokens += tokens;
+            if (tokens > fatReadWorstTokens) fatReadWorstTokens = tokens;
+            if (call.targetHash) fatReadTargetSet.add(call.targetHash);
+          }
         }
       }
     } else {
@@ -363,6 +405,10 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     cacheExpiryWorstGapMinutes,
     redZoneTurns,
     redZoneExcessTokens,
+    fatReads,
+    fatReadTokens,
+    fatReadWorstTokens,
+    fatReadTargets: [...fatReadTargetSet],
   };
 }
 

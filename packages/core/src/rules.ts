@@ -28,6 +28,12 @@ export interface SessionSnapshot {
   /** Bytes of CLAUDE.md memory the host loads for this cwd (claudemd.ts).
    * null = never probed — the rules stay silent rather than guess. */
   claudeMdBytes: number | null;
+  /** `Read` results that arrived as whole files rather than the slice asked
+   * for (transcript.ts). Optional: a caller without them gets no such tip. */
+  fatReads?: number;
+  fatReadTokens?: number;
+  fatReadWorstTokens?: number;
+  fatReadTargets?: string[];
   /** Bytes of skill frontmatter the host loads before turn one (skills.ts).
    * null = never probed. Attribution only: no rule fires on this, it only
    * changes what `context-tax` says — which is why it's optional where
@@ -57,6 +63,13 @@ const CONTEXT_TAX_MIN_TOKENS = 45_000;
 /** Below this the skill pack rounds to "0.0k tokens", which reads as a
  * measurement error rather than a small number — say it in words instead. */
 const SKILL_SHARE_MIN_TOKENS = 100;
+/** A single Read result at or above this is a whole file, not a slice — the
+ * same floor transcript.ts counts on. Local Read results sit at a p50 of
+ * ~550 tokens, so ordinary reads never reach it. */
+const FAT_READ_TOKENS = 8_000;
+/** One big file is often exactly what was needed. Three in a session is a
+ * habit with a lever, which is the same floor `reread-churn` uses. */
+const FAT_READ_MIN = 3;
 const CONTEXT_TAX_BASELINE_TOKENS = 15_000;
 const SUBAGENT_MIN_DISTINCT_READS = 15;
 const SUBAGENT_MIN_CONTEXT_PCT = 70;
@@ -135,6 +148,12 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
 
   const shellReads = detectShellReads(s);
   if (shellReads) findings.push(shellReads);
+
+  // Yields to `reread-churn`: that rule already bills repeated reads of one
+  // file, and charging the same bytes again under a second id is the double-
+  // nag `applyClaudeMd` was written to avoid.
+  const fat = detectFatReads(s);
+  if (fat) findings.push(fat);
 
   applyClaudeMd(s, findings);
 
@@ -305,6 +324,46 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
       ...(s.skillBytes == null ? {} : { skill_k: skillShare(s.skillBytes) }),
     },
     estSavingsTokens: s.firstContextTokens - CONTEXT_TAX_BASELINE_TOKENS,
+  };
+}
+
+/** Targets `reread-churn` would fire on: files read at least REREAD_MIN times. */
+function rereadOffenders(calls: ToolCall[]): Set<string> {
+  const byTarget = new Map<string, number>();
+  for (const c of calls) {
+    if (c.name !== "Read" || !c.targetHash) continue;
+    byTarget.set(c.targetHash, (byTarget.get(c.targetHash) ?? 0) + 1);
+  }
+  const out = new Set<string>();
+  for (const [t, n] of byTarget) if (n >= REREAD_MIN) out.add(t);
+  return out;
+}
+
+// Whole files arriving where a slice was asked for. The window then carries
+// them for every turn that follows, which is why this is measured on the
+// RESULT rather than on the call: asking to read a file is not a mistake,
+// getting 118k tokens back for it is.
+function detectFatReads(s: SessionSnapshot): Finding | null {
+  const count = s.fatReads ?? 0;
+  if (count < FAT_READ_MIN) return null;
+  // Yield only when EVERY oversized read was of a file `reread-churn` is
+  // already billing — then it is the same bytes under two names. Yielding on
+  // any overlap would be far too eager: measured on the local corpus, the
+  // session with the largest whole-file waste (914k tokens across 17 reads)
+  // also trips reread-churn for 2k, and a blanket yield traded the 772k
+  // finding for the 2k one.
+  const targets = s.fatReadTargets ?? [];
+  if (targets.length > 0 && targets.every((t) => rereadOffenders(s.toolCalls).has(t))) return null;
+  const total = s.fatReadTokens ?? 0;
+  const worst = s.fatReadWorstTokens ?? 0;
+  return {
+    tipId: "read-in-slices",
+    evidence: { count, worst_k: Math.round(worst / 1_000) },
+    // Only the excess over a bounded read, and only charged once: the window
+    // re-reads it at cache price thereafter, so claiming the full amount every
+    // turn would be the inflated-estimate mistake `subagent-offload` just had
+    // corrected.
+    estSavingsTokens: Math.max(0, Math.round((total - count * FAT_READ_TOKENS) * 0.9)),
   };
 }
 

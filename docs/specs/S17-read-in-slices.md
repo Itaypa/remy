@@ -1,5 +1,12 @@
 # S17 — Whole files read when a slice was asked for
 
+**Status: shipped 2026-08-06.** One deviation from this spec, found by running the rule
+against the real corpus: the yield to `reread-churn` is **per-target**, not blanket. A
+blanket yield (my first implementation) suppressed the single largest whole-file waste in
+the corpus — 914k tokens across 17 reads — because that same session also tripped
+`reread-churn` for 2k. It now yields only when *every* oversized read was of a file
+`reread-churn` is already billing, which is what "on the same target hash" meant.
+
 ## The mistake
 
 You ask about one function; the agent reads the whole 4,000-line file. That result lands

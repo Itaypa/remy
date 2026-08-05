@@ -39,6 +39,10 @@ function snapshot(overrides: Partial<SessionSnapshot>): SessionSnapshot {
     redZoneExcessTokens: 0,
     claudeMdBytes: null,
     skillBytes: null,
+    fatReads: 0,
+    fatReadTokens: 0,
+    fatReadWorstTokens: 0,
+    fatReadTargets: [],
     ...overrides,
   };
 }
@@ -458,5 +462,66 @@ describe("habit rules", () => {
     expect(shouldSuppressPlanMode([planned(), planned(), direct(), planned(), direct()])).toBe(true);
     expect(shouldSuppressPlanMode([planned(), planned(), direct(), direct(), direct()])).toBe(false);
     expect(shouldSuppressPlanMode([planned(), planned(), planned(), planned()])).toBe(false);
+  });
+
+  test("read-in-slices fires on 3+ whole-file results, and prices only the excess", () => {
+    const f = analyzeSession(
+      snapshot({ fatReads: 3, fatReadTokens: 60_000, fatReadWorstTokens: 30_000 }),
+    ).find((x) => x.tipId === "read-in-slices");
+    expect(f).toBeDefined();
+    expect(f!.evidence).toEqual({ count: 3, worst_k: 30 });
+    // Only what a bounded read would not have cost: 60k - 3x8k, at 0.9 because
+    // the window re-reads it at cache price after the first turn.
+    expect(f!.estSavingsTokens).toBe(Math.round((60_000 - 24_000) * 0.9));
+  });
+
+  test("one big file is not a habit — the tip stays silent below three", () => {
+    // Sometimes the whole file IS what you needed. The floor is what keeps
+    // this from scolding a legitimate read.
+    const two = analyzeSession(snapshot({ fatReads: 2, fatReadTokens: 400_000, fatReadWorstTokens: 300_000 }));
+    expect(two.some((x) => x.tipId === "read-in-slices")).toBe(false);
+
+    // And a caller with no result-size data at all says nothing either way.
+    const unmeasured = analyzeSession(snapshot({ fatReads: undefined }));
+    expect(unmeasured.some((x) => x.tipId === "read-in-slices")).toBe(false);
+  });
+
+  test("read-in-slices yields only when the fat reads ARE the re-read file", () => {
+    // Same file, read 5x and huge every time: reread-churn already bills those
+    // bytes, so charging them again under a second name is the double-nag
+    // applyClaudeMd exists to prevent.
+    const rereads = Array.from({ length: 5 }, () => call("Read"));
+    const sameFile = analyzeSession(
+      snapshot({
+        toolCalls: rereads,
+        fatReads: 4,
+        fatReadTokens: 80_000,
+        fatReadWorstTokens: 30_000,
+        fatReadTargets: ["aaaaaaaaaaaaaaaa"], // what call("Read") targets
+      }),
+    );
+    expect(sameFile.some((x) => x.tipId === "reread-churn")).toBe(true);
+    expect(sameFile.some((x) => x.tipId === "read-in-slices")).toBe(false);
+  });
+
+  test("read-in-slices still fires when the fat reads are DIFFERENT files", () => {
+    // The case a blanket yield got wrong. Measured on the real corpus: the
+    // session with the largest whole-file waste (914k tokens over 17 reads)
+    // also trips reread-churn for 2k, and yielding on any overlap threw away
+    // the 772k finding to protect the 2k one.
+    const rereads = Array.from({ length: 5 }, () => call("Read"));
+    const otherFiles = analyzeSession(
+      snapshot({
+        toolCalls: rereads,
+        fatReads: 4,
+        fatReadTokens: 80_000,
+        fatReadWorstTokens: 30_000,
+        fatReadTargets: ["bbbbbbbbbbbbbbbb", "cccccccccccccccc"],
+      }),
+    );
+    expect(otherFiles.some((x) => x.tipId === "reread-churn")).toBe(true);
+    const fat = otherFiles.find((x) => x.tipId === "read-in-slices");
+    expect(fat).toBeDefined();
+    expect(fat!.estSavingsTokens).toBeGreaterThan(0);
   });
 });

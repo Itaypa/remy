@@ -170,6 +170,21 @@ export const TIPS: Record<string, TipDef> = {
     // would assert something the probe never established.
     fallbacks: { skill_k: "the other part" },
   },
+  "read-in-slices": {
+    id: "read-in-slices",
+    docs: "https://code.claude.com/docs/en/costs",
+    emoji: "📖",
+    title: "Whole files where a slice would do",
+    short: "{count} whole files read → ask for the slice you need",
+    live: "{count} reads pulled whole files into context (worst ~{worst_k}k) — name the function or a line range",
+    what: "{count} Read results landed whole files in the window, the largest ~{worst_k}k tokens — the window carries them for every turn after.",
+    fix: "Ask for the part you need: a symbol name, or Read with offset/limit. Grep first when you're hunting — it returns matches, not files.",
+    cite: {
+      source: "Claude Code docs",
+      url: "https://code.claude.com/docs/en/costs",
+      quote: "A single \u201cgo to definition\u201d call replaces what might otherwise be a grep followed by reading multiple candidate files.",
+    },
+  },
   "subagent-offload": {
     id: "subagent-offload",
     docs: "https://code.claude.com/docs/en/sub-agents",
