@@ -23,3 +23,5 @@ games/
 
 # personal dev workflow — machine-specific paths, not part of the product
 .claude/commands/feature-cycle.md
+# morning reports: generated per night, read once, not repo history
+.claude/night-shift/
