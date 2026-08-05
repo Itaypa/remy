@@ -40,6 +40,20 @@ export interface TipDef {
   live?: string;
   /** One or two imperative sentences: exactly what to do next time. */
   fix: string;
+  /** Default values for placeholders a tip row might not carry.
+   *
+   * Two render paths need this and neither is hypothetical. The adaptive
+   * analyzer files rows with evidence `{"source":"adaptive"}` and no session
+   * numbers at all, and any tip row already sitting in a user's DB keeps the
+   * evidence it was written with — `tips.ts` refreshes it only when the same
+   * rule fires again. So the moment a template gains a placeholder, both of
+   * those render it as a literal `{skill_k}` in the report, on real databases,
+   * until the rule happens to re-fire.
+   *
+   * `short`/`live` survive that on their own (tipBody falls back to the
+   * title), but `what`/`fix` render with no such guard. Merged UNDER the
+   * row's real evidence, so a measured value always wins. */
+  fallbacks?: Record<string, string>;
   /** Expert citation backing the tip — the receipts behind the advice. */
   cite?: TipCite;
   /** Wisdom tips have no deterministic rule — only the adaptive analyzer selects them. */
@@ -142,7 +156,19 @@ export const TIPS: Record<string, TipDef> = {
     short: "{pct}% context used before turn 1 → audit MCP + CLAUDE.md",
     live: "{pct}% of your window was gone before turn one — audit MCP servers and prune CLAUDE.md",
     what: "{pct}% of the window was full before any work happened ({first_tokens} tokens) — a tax you pay again every session.",
-    fix: "Disconnect MCP servers you rarely use and prune CLAUDE.md — /context shows what's eating the space.",
+    // The attribution is appended, never substituted: `claude-md-prune` yields
+    // to this tip precisely because this sentence already says "prune
+    // CLAUDE.md" (rules.ts), and dropping either imperative would leave a user
+    // with a 40KB CLAUDE.md told the number and never told to cut it.
+    // It also goes in `fix` rather than `what` because the adaptive prompt
+    // slices this tip's catalog line at 220 chars (adapt.ts) — it already cuts
+    // mid-way through `fix`, so anything added to `what` would push more of
+    // the fix out of the model's view.
+    fix: "Disconnect MCP servers you rarely use and prune CLAUDE.md — /context shows what's eating the space. Skill descriptions are {skill_k} of it: /plugin turns off a pack you never invoke.",
+    // "skill descriptions", not "plugin skills": the measurement sums plugin,
+    // personal (~/.claude) and project skills, so naming plugins as the cause
+    // would assert something the probe never established.
+    fallbacks: { skill_k: "the other part" },
   },
   "subagent-offload": {
     id: "subagent-offload",

@@ -1,7 +1,31 @@
 # S12 — Startup-pack attribution: let `context-tax` name its biggest cause
 
-**Status:** part 1 (the probe + columns) shipped 2026-08-06. Part 2 (the attribution
-itself) is the buildable remainder — read the render landmine below before starting.
+**Status: shipped 2026-08-06** (part 1 the probe + columns, part 2 the attribution).
+Kept for the reasoning; the landmine section below is now the documentation of why
+`TipDef.fallbacks` exists.
+
+**What the build changed against this spec.** The adversarial review found four defects
+in the drafted copy, all folded in:
+- The drafted `fix` *replaced* the shipped sentence. It now **appends** — `claude-md-prune`
+  is suppressed whenever `context-tax` fires, and the stated reason is that this fix
+  already says "prune CLAUDE.md". Dropping either imperative would have left a user with
+  a bloated CLAUDE.md told the number and never told to cut it, and made the suppression
+  unearned. Locked by a test.
+- The copy says "skill descriptions", not "plugin skills". The probe sums plugin,
+  personal (`~/.claude`) and project skills, so naming plugins as *the* cause asserts
+  something it never measured.
+- Option 1 ("fill unconditionally at the rule") was **not sufficient on its own**: it
+  cannot reach tip rows already sitting in a user's DB, which keep the evidence they were
+  written with until the same rule fires again. Hence `TipDef.fallbacks`, merged under
+  real evidence at both render sites.
+- Attribution went in `fix` only, never `what`: the adaptive prompt slices this tip's
+  catalog line at 220 chars and already cuts mid-way through `fix`, so anything added to
+  `what` would push more of it out of the model's view.
+
+**Not done, and why:** `packages/core/test/support/scenarios.ts` has no skill-pack knob,
+so the coverage matrix cannot express "measured skills". That file was uncommitted work
+belonging to the developer at build time and was left untouched; `skillBytes` is optional
+on `SessionSnapshot` precisely so it compiles unchanged.
 
 > **Correction, measured after the council (2026-08-06).** The council's headline —
 > 81 skills / 26,357 B / "2.7× CLAUDE.md" — was inflated ~2.6×. It came from walking

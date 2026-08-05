@@ -38,6 +38,7 @@ function snapshot(overrides: Partial<SessionSnapshot>): SessionSnapshot {
     redZoneTurns: 0,
     redZoneExcessTokens: 0,
     claudeMdBytes: null,
+    skillBytes: null,
     ...overrides,
   };
 }
@@ -281,6 +282,54 @@ describe("waste signatures", () => {
 
     const under = analyzeSession(snapshot({ firstContextTokens: 44_999 }));
     expect(under.some((x) => x.tipId === "context-tax")).toBe(false);
+  });
+
+  test("context-tax attributes the skill pack when it was measured", () => {
+    const f = analyzeSession(
+      snapshot({ firstContextTokens: 50_000, skillBytes: 10_176 }),
+    ).find((x) => x.tipId === "context-tax");
+    // 10,176 B / 4 = 2,544 tokens. The unit is spelled out because
+    // claude-md-prune talks about the same startup pack in kilobytes.
+    expect(f!.evidence.skill_k).toBe("~2.5k tokens");
+  });
+
+  test("attribution changes what context-tax says, never whether it fires or what it's worth", () => {
+    // estSavingsTokens drives which tip goes active (tips.ts), so re-scoping it
+    // to the attributed part would silently re-rank the coaching queue — a much
+    // larger behaviour change than the copy edit this is meant to be.
+    const base = analyzeSession(snapshot({ firstContextTokens: 50_000 })).find(
+      (x) => x.tipId === "context-tax",
+    )!;
+    const measured = analyzeSession(
+      snapshot({ firstContextTokens: 50_000, skillBytes: 40_000 }),
+    ).find((x) => x.tipId === "context-tax")!;
+    expect(measured.estSavingsTokens).toBe(base.estSavingsTokens);
+    expect(measured.evidence.pct).toBe(base.evidence.pct);
+
+    // Below the trigger, a fat skill pack still doesn't make the tip fire.
+    expect(
+      analyzeSession(snapshot({ firstContextTokens: 44_999, skillBytes: 40_000 })).some(
+        (x) => x.tipId === "context-tax",
+      ),
+    ).toBe(false);
+  });
+
+  test("context-tax stays quiet about skills it never measured, and honest about a tiny pack", () => {
+    // NULL is every pre-existing row and any session whose SessionStart never
+    // fired. Emitting nothing lets the catalog's fallback supply the word —
+    // claiming 0 would be a measurement we don't have.
+    const unmeasured = analyzeSession(
+      snapshot({ firstContextTokens: 50_000, skillBytes: null }),
+    ).find((x) => x.tipId === "context-tax")!;
+    expect(unmeasured.evidence).not.toHaveProperty("skill_k");
+
+    // Measured-and-tiny is a real zero, not a missing value: the e2e harness
+    // runs under a fake HOME and legitimately measures 0. "0.0k tokens" reads
+    // as a broken probe, so it gets words instead of a rounded number.
+    const tiny = analyzeSession(
+      snapshot({ firstContextTokens: 50_000, skillBytes: 0 }),
+    ).find((x) => x.tipId === "context-tax")!;
+    expect(tiny.evidence.skill_k).toBe("a small slice");
   });
 
   test("cache-idle fires on verified expiries with count + worst-gap evidence", () => {

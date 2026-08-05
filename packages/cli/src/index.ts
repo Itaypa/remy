@@ -369,6 +369,7 @@ async function analyzeTranscript(
     // mid-session, or a --continue into an older session) — the rules read
     // that as "unknown" and stay quiet.
     claudeMdBytes: row?.claude_md_bytes ?? null,
+    skillBytes: row?.skill_bytes ?? null,
   });
   // Anti-nag: a user whose recent habit is already plan-first doesn't need
   // the plan-mode tip re-filed for the occasional direct session.

@@ -91,9 +91,21 @@ describe("renderReport", () => {
     }
   });
 
-  test("no tip's `fix` carries a placeholder — the report renders it without evidence", () => {
+  test("every placeholder in a `fix` has a fallback — the report renders it without evidence", () => {
+    // This used to say "no fix may carry a placeholder at all", which was the
+    // only way to hold the property before TipDef.fallbacks existed: the report
+    // renders `fix` for adaptive rows that have no session numbers, straight
+    // through renderTemplate with no title fallback to hide a stray brace.
+    // A placeholder is now allowed exactly when the catalog can fill it itself.
+    // The rendering test above is the real guard; this one localizes the blame
+    // to the catalog entry instead of a diff of the whole report.
     for (const [key, def] of Object.entries(TIPS)) {
-      expect(def.fix, `${key} fix has a placeholder; adaptive tips would print it raw`).not.toMatch(/\{\w+\}/);
+      for (const [, name] of def.fix.matchAll(/\{(\w+)\}/g)) {
+        expect(
+          def.fallbacks?.[name!],
+          `${key} fix uses {${name}} with no fallback; an adaptive tip would print it raw`,
+        ).toBeDefined();
+      }
     }
   });
 

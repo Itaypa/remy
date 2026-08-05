@@ -12,7 +12,7 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "reread-churn": { files: 8, worst: 12 },
   "edit-thrash": { files: 3, edits: 14 },
   "no-verify": { edits: 25, bash_calls: 18 },
-  "context-tax": { pct: 48, first_tokens: 96_000 },
+  "context-tax": { pct: 48, first_tokens: 96_000, skill_k: "~2.5k tokens" },
   "subagent-offload": { reads: 42, ctx_pct: 95 },
   "model-fit": { n: 12, tier: "opus" },
   "tools-over-bash": { count: 42 },
@@ -85,6 +85,53 @@ describe("tip catalog", () => {
       // It must cite the session, not restate the rule in the abstract.
       expect(rendered, `${key} live carries no number from the evidence`).toMatch(/\d/);
     }
+  });
+
+  test("no fix carries a placeholder the adaptive analyzer can't fill", () => {
+    // The adaptive analyzer files rows for ANY catalog id with evidence
+    // {"source":"adaptive"} and no session numbers (adapt.ts). It always writes
+    // a `why`, which the report substitutes for `what` — but `fix` is rendered
+    // unconditionally (ui.ts) and through renderTemplate, which has no title
+    // fallback to hide a stray placeholder. So an unfilled key in `fix` is a
+    // literal "{skill_k}" in front of a real user.
+    // This held by accident until now (no fix had a placeholder at all);
+    // `fallbacks` is what makes it hold on purpose.
+    for (const [key, def] of Object.entries(TIPS)) {
+      const rendered = renderTemplate(def.fix, { ...def.fallbacks, source: "adaptive", est: "999k" });
+      expect(rendered, `${key} fix leaves a placeholder on an adaptive row — add a fallback`).not.toMatch(
+        /\{\w+\}/,
+      );
+    }
+  });
+
+  test("context-tax renders whole sentences against evidence written before skill_k existed", () => {
+    // The migration case: tips persist, and tips.ts refreshes a row's evidence
+    // only when the same rule fires again. Every context-tax row already in a
+    // user's DB carries exactly {pct, first_tokens} — adding a placeholder to
+    // the copy without a fallback would render "{skill_k}" in /remy until the
+    // rule happened to re-fire.
+    const def = TIPS["context-tax"]!;
+    const legacy = { pct: 48, first_tokens: 96_000 };
+    for (const tpl of [def.what, def.fix, def.short, def.live!]) {
+      expect(renderTemplate(tpl, { ...def.fallbacks, ...legacy })).not.toMatch(/\{\w+\}/);
+    }
+  });
+
+  test("a fallback never wins over a real measurement", () => {
+    const def = TIPS["context-tax"]!;
+    const measured = renderTemplate(def.fix, { ...def.fallbacks, skill_k: "~9.9k tokens" });
+    expect(measured).toContain("~9.9k tokens");
+    expect(measured).not.toContain(def.fallbacks!.skill_k!);
+  });
+
+  test("context-tax keeps both of the imperatives its suppression rests on", () => {
+    // claude-md-prune is dropped whenever context-tax fires (rules.ts), and the
+    // stated reason is that this fix already tells you to prune CLAUDE.md.
+    // Losing either imperative would leave a user with a bloated CLAUDE.md and
+    // a heavy pack told the numbers and never told to cut anything.
+    const fix = TIPS["context-tax"]!.fix;
+    expect(fix).toContain("prune CLAUDE.md");
+    expect(fix).toContain("MCP servers");
   });
 
   test("short is Problem → Solution — no brand tag, no value clause, no {est}", () => {

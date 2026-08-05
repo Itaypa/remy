@@ -117,7 +117,8 @@ function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
     // evidence is display-only
   }
   const value = tip.est_savings_tokens > 0 ? ` → +${fmtTok(tip.est_savings_tokens)} 🪙` : "";
-  const rendered = renderTemplate(template, evidence);
+  // Fallbacks first so a real measurement always wins over the default.
+  const rendered = renderTemplate(template, { ...def.fallbacks, ...evidence });
   // Not every tip row carries the evidence its template asks for: the adaptive
   // analyzer files tips with evidence {source:"adaptive"} and no session
   // numbers at all (adapt.ts), and it may pick any catalog id, including a
@@ -325,7 +326,10 @@ export function renderReport(opts: {
       try {
         evidence = opts.active.evidence ? JSON.parse(opts.active.evidence) : {};
       } catch {}
-      const vars = { ...evidence, est: fmtTok(opts.active.est_savings_tokens) };
+      // Same merge order as tipBody: a stored row from an older version, or an
+      // adaptive row with no session numbers, still renders a whole sentence
+      // here — this path has no title fallback to catch a stray placeholder.
+      const vars = { ...def.fallbacks, ...evidence, est: fmtTok(opts.active.est_savings_tokens) };
       lines.push(`│ ${def.emoji} ${def.title}`);
       // Labeled rows: what happened → what it's worth → what to do. The
       // adaptive analyzer's own sentence (with the user's numbers) replaces

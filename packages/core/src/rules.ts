@@ -28,6 +28,12 @@ export interface SessionSnapshot {
   /** Bytes of CLAUDE.md memory the host loads for this cwd (claudemd.ts).
    * null = never probed — the rules stay silent rather than guess. */
   claudeMdBytes: number | null;
+  /** Bytes of skill frontmatter the host loads before turn one (skills.ts).
+   * null = never probed. Attribution only: no rule fires on this, it only
+   * changes what `context-tax` says — which is why it's optional where
+   * `claudeMdBytes` is required. A caller that doesn't supply it gets the
+   * same tip it got before, worded the same way. */
+  skillBytes?: number | null;
 }
 
 export interface Finding {
@@ -48,6 +54,9 @@ const EDIT_THRASH_EST_TOKENS_PER_EDIT = 5_000;
 const NO_VERIFY_MIN_EDITS = 4;
 const NO_VERIFY_EST_TOKENS = 10_000;
 const CONTEXT_TAX_MIN_TOKENS = 45_000;
+/** Below this the skill pack rounds to "0.0k tokens", which reads as a
+ * measurement error rather than a small number — say it in words instead. */
+const SKILL_SHARE_MIN_TOKENS = 100;
 const CONTEXT_TAX_BASELINE_TOKENS = 15_000;
 const SUBAGENT_MIN_DISTINCT_READS = 15;
 const SUBAGENT_MIN_CONTEXT_PCT = 70;
@@ -268,6 +277,18 @@ function detectNoVerify(s: SessionSnapshot): Finding | null {
 // Session starts already heavy — MCP schemas / bloated CLAUDE.md tax paid
 // before turn one, on every session. Threshold is high enough to absorb a
 // big pasted first prompt.
+/** The skill pack as a token count, spelled with its unit. `claude-md-prune`
+ * talks about the same startup pack in kilo*bytes* ("CLAUDE.md is 40KB"), so a
+ * bare "2.5k" next to it would read as the same unit and it is not. Below a
+ * rounding floor it says "a slice" rather than "0.0k tokens", because a
+ * measured-but-tiny pack is a true zero and claiming otherwise is the kind of
+ * small lie that costs a coach its numbers. */
+function skillShare(bytes: number): string {
+  const tokens = bytes / BYTES_PER_TOKEN;
+  if (tokens < SKILL_SHARE_MIN_TOKENS) return "a small slice";
+  return `~${(tokens / 1000).toFixed(1)}k tokens`;
+}
+
 function detectContextTax(s: SessionSnapshot): Finding | null {
   if (s.firstContextTokens < CONTEXT_TAX_MIN_TOKENS) return null;
   return {
@@ -275,6 +296,13 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
     evidence: {
       pct: Math.min(100, Math.round((s.firstContextTokens / s.contextLimit) * 100)),
       first_tokens: s.firstContextTokens,
+      // Attribution, not a trigger: it changes what the tip SAYS, never
+      // whether it fires or what it's worth. estSavingsTokens deliberately
+      // stays the whole pack — it drives which tip goes active (tips.ts), so
+      // re-scoping it here would silently re-rank the coaching queue.
+      // Omitted entirely when unmeasured; the catalog's `fallbacks` supplies
+      // the word, which also covers rows written before this shipped.
+      ...(s.skillBytes == null ? {} : { skill_k: skillShare(s.skillBytes) }),
     },
     estSavingsTokens: s.firstContextTokens - CONTEXT_TAX_BASELINE_TOKENS,
   };
