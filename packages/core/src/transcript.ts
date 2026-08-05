@@ -45,6 +45,14 @@ export interface TranscriptStats {
   /** Hashed targets of those reads, so the rules engine can tell a whole-file
    * read apart from a file `reread-churn` is already billing. */
   fatReadTargets: string[];
+  /** Reasoning-effort mix across main-chain turns, as counts only — never the
+   * value itself, so no new enum reaches the storage whitelist. `effortTurns`
+   * is every turn that declared one, so a gap between it and max+high is how
+   * we learn a `low`/`medium` value has appeared in the wild. */
+  effortTurns: number;
+  effortMaxTurns: number;
+  effortHighTurns: number;
+  effortMaxOutTokens: number;
 }
 
 export interface ContextInfo {
@@ -237,6 +245,10 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   let fatReadTokens = 0;
   let fatReadWorstTokens = 0;
   const fatReadTargetSet = new Set<string>();
+  let effortTurns = 0;
+  let effortMaxTurns = 0;
+  let effortHighTurns = 0;
+  let effortMaxOutTokens = 0;
   let contextNow: number | null = null;
   let firstContext: number | null = null;
   let assistantTurns = 0;
@@ -276,6 +288,19 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
               afterCompact: compactPending,
               ts: Number.isFinite(parsed) ? parsed : null,
             });
+            // Reasoning effort rides on the ENTRY, not inside message.usage —
+            // which is why an earlier review concluded it was unobservable
+            // after enumerating only the usage keys. Counted here, never
+            // stored as a string.
+            if (typeof entry.effort === "string" && entry.effort !== "") {
+              effortTurns += 1;
+              if (entry.effort === "max") {
+                effortMaxTurns += 1;
+                effortMaxOutTokens += msg.usage.output_tokens ?? 0;
+              } else if (entry.effort === "high") {
+                effortHighTurns += 1;
+              }
+            }
             compactPending = false;
           } else {
             mainTurns[idx]!.usage = msg.usage; // streaming update of the same turn
@@ -409,6 +434,10 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     fatReadTokens,
     fatReadWorstTokens,
     fatReadTargets: [...fatReadTargetSet],
+    effortTurns,
+    effortMaxTurns,
+    effortHighTurns,
+    effortMaxOutTokens,
   };
 }
 

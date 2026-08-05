@@ -16,6 +16,7 @@ import {
   setSkillPack,
   readSubagentStats,
   setSubagentStats,
+  setEffortMix,
   parseAdaptOutput,
   contextFromPayload,
   binDir,
@@ -339,6 +340,9 @@ async function analyzeTranscript(
   // session is 4.0MB across 22 files, which would blow the hook budget many
   // times over. Once per session is enough for a number nothing renders yet.
   if (sessionEnd) setSubagentStats(db, sessionId, readSubagentStats(transcriptPath, sessionId));
+  // Effort mix comes free with the parse we already did — no extra I/O, so it
+  // runs on every analysis rather than only at SessionEnd.
+  setEffortMix(db, sessionId, stats);
   db.query(
     `UPDATE sessions SET
        tokens_in = ?, tokens_out = ?, cache_read = ?, cache_write = ?,

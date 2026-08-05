@@ -156,6 +156,14 @@ function migrate(db: Database): void {
   addColumnIfMissing(db, "sessions", "sub_cache_write", "sub_cache_write INTEGER");
   addColumnIfMissing(db, "sessions", "sub_tools", "sub_tools INTEGER");
   addColumnIfMissing(db, "sessions", "sub_model", "sub_model TEXT");
+  // Reasoning-effort mix, as counts (see transcript.ts). Collection only: no
+  // rule reads these yet, because locally 17 of 18 sessions never use `max` and
+  // the one that does is this repo's own overnight loop — a threshold set on
+  // that would be tuned to fire on its author. NULL = never measured.
+  addColumnIfMissing(db, "sessions", "effort_turns", "effort_turns INTEGER");
+  addColumnIfMissing(db, "sessions", "effort_max_turns", "effort_max_turns INTEGER");
+  addColumnIfMissing(db, "sessions", "effort_high_turns", "effort_high_turns INTEGER");
+  addColumnIfMissing(db, "sessions", "effort_max_out", "effort_max_out INTEGER");
   // Tool calls denied by the host's auto-mode classifier (the PermissionDenied
   // hook). Defaults to 0 rather than NULL, so rows written before this shipped
   // are indistinguishable from genuinely denial-free ones — any future *rate*
@@ -285,6 +293,11 @@ export interface SessionRow {
   sub_cache_write: number | null;
   sub_tools: number | null;
   sub_model: string | null;
+  /** Reasoning-effort mix as counts (local-only). NULL = never measured. */
+  effort_turns: number | null;
+  effort_max_turns: number | null;
+  effort_high_turns: number | null;
+  effort_max_out: number | null;
   /** Tool calls denied by the host's auto-mode classifier (local-only). */
   perm_denials: number;
 }
@@ -399,6 +412,22 @@ export function setSubagentStats(db: Database, sessionId: string, s: unknown): v
     `UPDATE sessions SET sub_agents = ?, sub_tokens_in = ?, sub_tokens_out = ?,
        sub_cache_write = ?, sub_tools = ?, sub_model = ? WHERE session_id = ?`,
   ).run(...(ok ? vals : [null, null, null, null, null]), model, sessionId);
+}
+
+/** Record the reasoning-effort mix for a session. Counts only — the effort
+ * VALUE never reaches the database, so no new enum joins the whitelist. Same
+ * all-or-nothing coercion as its siblings: a partial row here would be a
+ * turn count with no total to read it against. */
+export function setEffortMix(db: Database, sessionId: string, s: unknown): void {
+  const whole = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
+  const st = s as Record<string, unknown> | null;
+  const vals = [whole(st?.effortTurns), whole(st?.effortMaxTurns), whole(st?.effortHighTurns), whole(st?.effortMaxOutTokens)];
+  const ok = vals.every((v) => v !== null);
+  db.query(
+    `UPDATE sessions SET effort_turns = ?, effort_max_turns = ?, effort_high_turns = ?, effort_max_out = ?
+     WHERE session_id = ?`,
+  ).run(...(ok ? vals : [null, null, null, null]), sessionId);
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {

@@ -76,6 +76,10 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     sub_cache_write: null,
     sub_tools: null,
     sub_model: null,
+    effort_turns: null,
+    effort_max_turns: null,
+    effort_high_turns: null,
+    effort_max_out: null,
     perm_denials: 0,
     ...overrides,
   };

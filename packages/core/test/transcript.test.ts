@@ -733,3 +733,55 @@ describe("classifyCommand — every member of every set", () => {
     expect(classifyCommand("find . -exec rm {} ;")).toBe("other");
   });
 });
+
+describe("reasoning-effort mix", () => {
+  const withEffort = (id: string, effort: string | undefined, out: number) => {
+    const e = JSON.parse(assistantLine({ id, usage: { output_tokens: out } }));
+    if (effort !== undefined) e.effort = effort;
+    return JSON.stringify(e);
+  };
+
+  test("counts turns by effort, and the output max effort produced", () => {
+    const stats = parseTranscript(
+      [
+        withEffort("m1", "high", 900),
+        withEffort("m2", "max", 2_000),
+        withEffort("m3", "max", 1_500),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.effortTurns).toBe(3);
+    expect(stats.effortHighTurns).toBe(1);
+    expect(stats.effortMaxTurns).toBe(2);
+    expect(stats.effortMaxOutTokens).toBe(3_500);
+  });
+
+  test("a turn with no effort field is not counted at all", () => {
+    // Synthetic and API-error entries carry no effort. Counting them as some
+    // default would invent a mix the session never had.
+    const stats = parseTranscript(
+      [withEffort("m1", undefined, 100), withEffort("m2", "high", 200)].join("\n"),
+      200_000,
+    );
+    expect(stats.effortTurns).toBe(1);
+    expect(stats.effortHighTurns).toBe(1);
+  });
+
+  test("an unseen effort value still counts toward the total — that gap is the signal", () => {
+    // No low/medium exists in any local transcript, so the day one appears we
+    // need to notice. effortTurns counts every turn that declared an effort;
+    // when it exceeds max + high, a value we do not bucket has arrived.
+    const stats = parseTranscript(
+      [withEffort("m1", "high", 10), withEffort("m2", "medium", 10), withEffort("m3", "low", 10)].join("\n"),
+      200_000,
+    );
+    expect(stats.effortTurns).toBe(3);
+    expect(stats.effortHighTurns + stats.effortMaxTurns).toBe(1);
+    expect(stats.effortTurns - (stats.effortHighTurns + stats.effortMaxTurns)).toBe(2);
+  });
+
+  test("the effort VALUE never leaves the parser — only counts do", () => {
+    const stats = parseTranscript(withEffort("m1", "max", 10), 200_000);
+    expect(JSON.stringify(stats)).not.toContain("max");
+  });
+});
