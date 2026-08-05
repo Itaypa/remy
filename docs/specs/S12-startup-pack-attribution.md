@@ -3,15 +3,26 @@
 **Status:** part 1 (the probe + columns) shipped 2026-08-06. Part 2 (the attribution
 itself) is the buildable remainder — read the render landmine below before starting.
 
+> **Correction, measured after the council (2026-08-06).** The council's headline —
+> 81 skills / 26,357 B / "2.7× CLAUDE.md" — was inflated ~2.6×. It came from walking
+> `~/.claude/plugins/`, which includes `marketplaces/` (a browsable catalog of plugins
+> that are *not installed*) and a plugin that is installed but **disabled**. Resolving
+> installs from `installed_plugins.json` and honouring `enabledPlugins` gives the real
+> figure on this machine: **35 skills, 10,176 B ≈ 2.5k tokens every session start**,
+> against this repo's CLAUDE.md at 9,659 B ≈ 2.4k. So skills are roughly *equal* to
+> CLAUDE.md here, not triple it. The finding survives — it is still the largest
+> component of the startup pack that `context-tax` can measure and does not name, and
+> it is still inherited rather than chosen — but any copy quoting "2.7×" is wrong.
+
 ## The mistake
 
-You enabled six plugins. You inherited seventy-eight skills. Every one of their
+You enabled a handful of plugins. You inherited dozens of skills. Every one of their
 descriptions is loaded before you type a word, on every session, whether you invoke them
 or not — and unlike CLAUDE.md, you never wrote a line of it, which is exactly why nobody
-notices. Measured on this machine: **81 distinct skills, 26,357 B of name+description
-≈ 6.6k tokens at every session start — 2.7× this repo's own CLAUDE.md (9,659 B).**
-Against a measured `firstContextTokens` of p50 37k, skills are ~18% of the startup pack
-while CLAUDE.md is ~6%. REMY already bills the user for this pack via `context-tax`, and
+notices. Measured on this machine: **35 distinct skills, 10,176 B of name+description
+≈ 2.5k tokens at every session start**, against this repo's own CLAUDE.md at 9,659 B
+≈ 2.4k. Against a measured `firstContextTokens` of p50 37k that is ~7% of the startup
+pack — the same order as CLAUDE.md, which the product already coaches on. REMY already bills the user for this pack via `context-tax`, and
 its fix line says "Disconnect MCP servers you rarely use and prune CLAUDE.md" — it names
 the two smaller levers and stays silent about the largest one it can measure. That is the
 product showing worse information than it already possesses.
@@ -25,8 +36,9 @@ product showing worse information than it already possesses.
 - [Team-adoption anti-patterns, 2026](https://www.digitalapplied.com/blog/claude-code-anti-patterns-team-adoption-failure-modes-2026) —
   "skill sprawl" named as one of eight; "fifty skills nobody remembers", top five are
   90%+ of invocations, long tail at zero; suggested cap ≈20.
-- Local measurement (2026-08-05, host 2.1.220): 136 `SKILL.md` files → 81 distinct after
-  dedupe, 24,860 B of it from plugins (94%), 1,497 B from project skills (6%).
+- Local measurement (2026-08-06, host 2.1.220), from the shipped probe rather than a
+  directory walk: **35 skills, 10,176 B**, of which 32 skills are plugin-inherited and 3
+  are this repo's own. One installed plugin is disabled and correctly contributes 0.
 
 ## Detection
 
@@ -49,10 +61,14 @@ Inputs, both now on the session row (part 1, shipped):
    whose skills are still on disk and never load. Billing a user for skills they already
    disabled is the single worst correctness trap here.
 3. **Plugin-cache duplicates.** The same plugin appears on disk under both a version
-   directory and a hash directory (`vercel/0.45.1` and `vercel/19606ac163fe`). Naive
-   counting gives 136 files for 81 skills — a 1.68× inflation.
-4. **Skill bodies.** Only frontmatter loads at session start. Bodies are 1,215,881 B
-   against 26,357 B of frontmatter — conflating them inflates the number 46×.
+   directory and a hash directory (`vercel/0.45.1` and `vercel/19606ac163fe`). The probe
+   de-duplicates by skill name, since the host loads one copy of each.
+4. **Skill bodies.** Only frontmatter loads at session start, and bodies are two orders
+   of magnitude larger — measuring whole files overstates the tax ~46×.
+6. **Oversized frontmatter.** A single small read is a trap: the `ai-sdk` skill runs
+   15,705 B before its closing `---`, so a 4KB head silently drops the *heaviest*
+   skills. The probe reads small, then re-reads big on a miss. This one bit during
+   development and cost 30% of the measured weight.
 5. **Marketplace-cached-but-uninstalled** plugins, and `.claude/skills/` belonging to
    repos other than this session's cwd.
 

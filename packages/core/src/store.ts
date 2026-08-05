@@ -137,6 +137,14 @@ function migrate(db: Database): void {
   // SessionStart hook never fired), 0 is "probed, the user genuinely has none".
   // Collapsing them would fire the missing-CLAUDE.md tip at every old session.
   addColumnIfMissing(db, "sessions", "claude_md_bytes", "claude_md_bytes INTEGER");
+  // Bytes of skill name+description frontmatter the host loads before turn one,
+  // and how many distinct skills that is (see skills.ts). Same NULL-vs-0
+  // discipline as claude_md_bytes, and it matters more here: this number is not
+  // derivable after the fact. Plugins get enabled and disabled, so a session
+  // that went unmeasured is unmeasurable forever — which is why the columns
+  // ship ahead of the rule that will read them.
+  addColumnIfMissing(db, "sessions", "skill_bytes", "skill_bytes INTEGER");
+  addColumnIfMissing(db, "sessions", "skill_count", "skill_count INTEGER");
   // Tool calls denied by the host's auto-mode classifier (the PermissionDenied
   // hook). Defaults to 0 rather than NULL, so rows written before this shipped
   // are indistinguishable from genuinely denial-free ones — any future *rate*
@@ -226,6 +234,10 @@ export interface SessionRow {
   /** Bytes of CLAUDE.md memory loaded for this session's cwd (local-only).
    * NULL = never probed, 0 = probed and absent. */
   claude_md_bytes: number | null;
+  /** Bytes of skill frontmatter the host loads before turn one, and how many
+   * distinct skills that is (local-only). NULL = never probed, 0 = none. */
+  skill_bytes: number | null;
+  skill_count: number | null;
   /** Tool calls denied by the host's auto-mode classifier (local-only). */
   perm_denials: number;
 }
@@ -298,6 +310,24 @@ export function upsertSession(
 export function setClaudeMdBytes(db: Database, sessionId: string, bytes: unknown): void {
   const n = typeof bytes === "number" && Number.isFinite(bytes) ? Math.max(0, Math.trunc(bytes)) : null;
   db.query(`UPDATE sessions SET claude_md_bytes = ? WHERE session_id = ?`).run(n, sessionId);
+}
+
+/** Record the skill-pack measurement for a session. Same coercion contract as
+ * setClaudeMdBytes — the INTEGER affinity would happily store a string, so this
+ * is what keeps the column numeric. Either both values are usable or neither is
+ * stored: a byte count without its skill count is a number nothing can explain. */
+export function setSkillPack(db: Database, sessionId: string, pack: unknown): void {
+  const whole = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
+  const p = pack as { bytes?: unknown; count?: unknown } | null;
+  const bytes = whole(p?.bytes);
+  const count = whole(p?.count);
+  const ok = bytes !== null && count !== null;
+  db.query(`UPDATE sessions SET skill_bytes = ?, skill_count = ? WHERE session_id = ?`).run(
+    ok ? bytes : null,
+    ok ? count : null,
+    sessionId,
+  );
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {

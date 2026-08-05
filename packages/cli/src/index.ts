@@ -12,6 +12,8 @@ import {
   buildAdaptPrompt,
   claudeMdBytes,
   setClaudeMdBytes,
+  skillPackBytes,
+  setSkillPack,
   parseAdaptOutput,
   contextFromPayload,
   binDir,
@@ -172,7 +174,14 @@ async function ingest(): Promise<void> {
       // read — see claudemd.ts). Every source counts, not just "startup": a
       // resumed session loads the same files. claudeMdBytes() cannot throw,
       // so this can't cost the splash below.
-      if (typeof payload.cwd === "string") setClaudeMdBytes(db, sessionId, claudeMdBytes(payload.cwd));
+      if (typeof payload.cwd === "string") {
+        setClaudeMdBytes(db, sessionId, claudeMdBytes(payload.cwd));
+        // The other half of the startup pack, and the bigger one: skill
+        // frontmatter from every enabled plugin. Measured here because it is
+        // not recoverable later — plugins get toggled, and a session that
+        // wasn't measured at its start can never be. Cannot throw (skills.ts).
+        setSkillPack(db, sessionId, skillPackBytes(payload.cwd));
+      }
       if (payload.source === "startup") {
         const week = weekTotals(recentSessions(db, new Date(Date.now() - WEEK_MS).toISOString()));
         const tip = activeTip(db);

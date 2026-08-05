@@ -42,7 +42,7 @@ Sources, by type:
 | F2 | **Opus left as the default model for everything.** | Anthropic docs name it one of the two top causes of unexpected spend; every model-selection guide repeats "plan with Opus, execute with Sonnet" | Opus ≈5× Sonnet per token, and the weekly window is shared across models | Yes — model is already on the session row | **rejected** — already shipped as `model-fit`; see below |
 | F3 | **Only ever auto-compacting** instead of a manual `/compact` at a phase boundary. | mindstudio, firecrawl, claudefast; Anthropic documents custom compaction instructions | a compaction of a full context is itself a large request | Yes, but the local data inverts the premise | **rejected** — see below |
 | F4 | **Extended thinking left high on mechanical work.** Thinking tokens bill as output; `/effort`, `MAX_THINKING_TOKENS`. | Anthropic docs | "tens of thousands of tokens per request" at default budget | **No — the count does not exist in the data** | **rejected, with a revisit trigger** — see below |
-| F5 | **Skill sprawl** — a skill deck you never draw from, loaded at every session start. | team-adoption analysis (cap ≈20, "top five are 90% of invocations"); Anthropic's "move instructions from CLAUDE.md to skills" implies the inverse failure | measured on this machine: 81 distinct skills, 26,357 B of frontmatter ≈ **6.6k tokens every session start, 2.7× this repo's CLAUDE.md** | Yes — a near-clone of the shipped `claude_md_bytes` probe | **spec'd — S12**, reframed as attribution |
+| F5 | **Skill sprawl** — a skill deck you never draw from, loaded at every session start. | team-adoption analysis (cap ≈20, "top five are 90% of invocations"); Anthropic's "move instructions from CLAUDE.md to skills" implies the inverse failure | measured by the shipped probe: 35 skills, 10,176 B ≈ **2.5k tokens every session start**, level with this repo's CLAUDE.md (the council's 81/26,357 B counted the uninstalled marketplace catalog — see S12) | Yes — a near-clone of the shipped `claude_md_bytes` probe | **spec'd — S12**, reframed as attribution |
 | F6 | **Scheduled tasks fire on idle sessions**, sending the full context each interval. | Anthropic docs, under "why usage climbs in a long session" | full context per tick, while you're not even there | Would coach a cron, not a developer | **rejected** — see below |
 | F7 | **Skipping plan mode** on multi-file work. | aicodex, Anthropic ("prevents expensive re-work") | "20 minutes of correction vs 2 minutes upfront" | No known signal that plan mode was on | **out of scope for now** — not observable |
 | F8 | **Never `/clear`ing between unrelated tasks.** | Anthropic names it the #1 habit to share | stale context taxes every later message | Yes, but | **already measured and dropped** — this is S7 (marathon), dropped on evidence. Do not re-propose without new data. |
@@ -59,7 +59,7 @@ Sources, by type:
 - The docs now say MCP tool definitions are **deferred by default** (only names enter
   context until a tool is used). This weakens the raw "7k per message" numbers from the
   practitioner posts — F1's threshold has to survive deferral, which is exactly what the
-  council argued about. See `docs/specs/S12-mcp-surface-tax.md`.
+  council argued about. See `docs/specs/S12-startup-pack-attribution.md`.
 
 ### Verdict notes — from the council (Opus seat: feasibility · Fable seat: value)
 
@@ -88,10 +88,12 @@ outright reject. Both moved.
   evidence we don't have.
 - **F5 spec'd, but not as a new tip — as attribution.** The Fable seat's objection was
   that auditing your toolbox rather than your behavior is nagware. The Opus seat's
-  measurement answered it: **94% of the weight (78 of 81 skills, 24,860 B) is behind a
-  one-command lever** (`/plugin` disable), because the user did not install 78 skills —
-  they enabled 6 plugins and inherited 78. Nobody chooses 24,860 B of descriptions on
-  purpose, which is exactly why it goes unnoticed.
+  measurement answered it: the weight sits behind a one-command lever (`/plugin`
+  disable), because the user did not install these skills one by one — they enabled a
+  handful of plugins and inherited the rest. Nobody chooses 10KB of descriptions on
+  purpose, which is exactly why it goes unnoticed. (The seat's *magnitude* was wrong —
+  it walked the marketplace catalog and counted a disabled plugin; the shipped probe
+  measures 10,176 B, not 26,357. The lever argument is unaffected.)
   The resolution dissolved the disagreement instead of winning it: **ship no new tip.**
   `context-tax` already bills the user for this pack and already says "audit MCP + prune
   CLAUDE.md" — it points at the *smaller* of the levers it can see. Teaching it to name
