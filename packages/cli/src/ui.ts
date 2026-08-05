@@ -308,14 +308,20 @@ export function renderReport(opts: {
 
   // Waste rows worth ~0 tokens are noise, not insight — only show real losses.
   const waste = opts.tips.filter((t) => t.est_savings_tokens > 0);
+  lines.push(sep("🔎 waste found this session"));
   if (waste.length > 0) {
-    lines.push(sep("🔎 waste found this session"));
     for (const t of waste) {
       const def = TIPS[t.tip_id];
       lines.push(`│ ${def?.emoji ?? "•"} ${def?.title ?? t.tip_id} — ~${fmtTok(t.est_savings_tokens)} 🪙 recoverable`);
     }
+  } else if (opts.tips.length === 0) {
+    lines.push("│ ✨ none — clean session!");
   } else {
-    lines.push(sep("🔎 waste found this session"), "│ ✨ none — clean session!");
+    // Findings that cost no tokens still exist — `subagent-offload` buys room
+    // in the window rather than tokens back. Calling the session clean and
+    // then coaching it in the very next box is the report contradicting itself
+    // on one screen, so say what is actually true instead.
+    lines.push("│ ✨ no tokens left on the table — one habit worth a look below");
   }
 
   if (opts.active) {

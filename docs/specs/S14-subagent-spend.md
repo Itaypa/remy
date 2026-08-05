@@ -151,6 +151,5 @@ must land first, on its own lens: "a coaching product whose headline number sile
 `estSavingsTokens = (reads - 10) × 1500` books *context relief* as tokens *not spent*,
 while the delegation it recommends costs ~69k billable at the local median. The sign is
 inverted on the metered axis, and that field ranks the coaching queue — so it is
-mis-prioritized coaching, not a cosmetic error. Both seats agreed. Fix separately (S16):
-drop the value clause and let the tip stand on window headroom, which is what its own
-citation actually claims.
+mis-prioritized coaching, not a cosmetic error. Both seats agreed. Fixed in S16 (shipped 2026-08-06): the value clause is gone and the tip stands on window
+headroom, which is what its own citation always claimed.

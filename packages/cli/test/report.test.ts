@@ -63,6 +63,20 @@ describe("renderReport", () => {
     expect(clean).toContain("✨ none — clean session!");
   });
 
+  test("a session whose only finding costs no tokens is not called clean", () => {
+    // subagent-offload buys window headroom, not tokens back, so it carries no
+    // estimate — and it is filtered out of the waste list above. Reusing the
+    // "clean session!" line for that case had the report declaring the session
+    // spotless and then coaching it in the very next box.
+    const out = renderReport({
+      session: session(),
+      tips: [tip({ tip_id: "subagent-offload", est_savings_tokens: 0 })],
+      active: null,
+    });
+    expect(out).not.toContain("none — clean session!");
+    expect(out).toContain("no tokens left on the table");
+  });
+
   test("the analyzer's own sentence replaces the generic explanation", () => {
     const out = renderReport({
       session: session(),

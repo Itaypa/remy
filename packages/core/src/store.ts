@@ -168,6 +168,34 @@ function migrate(db: Database): void {
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )`);
+  runOnce(db, "subagent_offload_est_reset", () => {
+    // `subagent-offload` used to carry a token estimate with the sign
+    // backwards — it counted context relief as tokens not spent (see
+    // detectSubagentOffload). Correcting the rule is not enough on its own:
+    // tips persist, are only re-costed when the same rule fires again, and
+    // nothing expires them, so an already-open row would keep the inflated
+    // figure indefinitely and go on winning the one active-tip slot.
+    db.query(`UPDATE tips SET est_savings_tokens = 0
+              WHERE tip_id = 'subagent-offload' AND status IN ('active','queued')`).run();
+  });
+}
+
+/** Run a one-shot data migration exactly once per database.
+ *
+ * Distinct from addColumnIfMissing: schema migrations are cheap to re-check
+ * every open, but a data UPDATE is not — migrate() runs in every hook and on
+ * every statusline tick (~1/s), and an unguarded UPDATE would be a write per
+ * second forever. The marker makes it idempotent and, like everything else in
+ * this file, a failure here must never take the host down with it. */
+function runOnce(db: Database, key: string, fn: () => void): void {
+  try {
+    const done = db.query(`SELECT value FROM sync_state WHERE key = ?`).get(`migration:${key}`);
+    if (done) return;
+    fn();
+    db.query(`INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)`).run(`migration:${key}`, "1");
+  } catch {
+    // A locked DB or a table that doesn't exist yet — try again next open.
+  }
 }
 
 function tableHasColumn(db: Database, table: string, column: string): boolean {

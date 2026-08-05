@@ -45,9 +45,15 @@ export function recordFindings(
       .query(`SELECT * FROM tips WHERE tip_id = ? AND status IN ('active','queued') LIMIT 1`)
       .get(f.tipId) as TipRow | null;
     if (existing) {
-      // Re-analysis of the same session refreshes the numbers instead of duplicating.
+      // Re-analysis of the same session refreshes the numbers instead of
+      // duplicating. This used to write MAX(existing, new), which made it a
+      // high-water mark rather than a refresh: once a tip had been filed with
+      // a big number it could never come down, so a corrected estimate — or a
+      // session that turned out cheaper on the second look — silently kept the
+      // old figure. That also meant a fix to any rule's arithmetic was inert
+      // for every row already in a user's DB. The newest analysis wins.
       db.query(`UPDATE tips SET est_savings_tokens = ?, evidence = ?, session_id = ? WHERE id = ?`).run(
-        Math.max(existing.est_savings_tokens, f.estSavingsTokens),
+        f.estSavingsTokens,
         JSON.stringify(f.evidence),
         sessionId,
         existing.id,

@@ -320,7 +320,21 @@ function detectSubagentOffload(s: SessionSnapshot): Finding | null {
   return {
     tipId: "subagent-offload",
     evidence: { reads: distinctReads, ctx_pct: s.contextPct },
-    estSavingsTokens: (distinctReads - 10) * SUBAGENT_EST_TOKENS_PER_READ,
+    // No token estimate, on purpose. This used to claim
+    // `(reads - 10) * 1500` tokens saved, which had the sign backwards on the
+    // metered axis: delegating to a subagent COSTS more tokens than doing the
+    // work inline — measured locally, the median worker spends ~69k billable
+    // to hand back ~2.4k of report. What delegation actually buys is room in
+    // the main window, which is what this tip's copy and its citation have
+    // always said. Since est_savings_tokens ranks the coaching queue, the
+    // inflated number was also winning the one active-tip slot against tips
+    // with real measured savings.
+    // Not re-derived into an honest number because there isn't one to derive:
+    // the snapshot counts distinct read TARGETS, never their size, so any
+    // replacement would be the same per-read guess wearing a new hat. The one
+    // measured headroom figure we have (redZoneExcessTokens) is already spent
+    // by `context-band`, and reusing it would double-count the same tokens.
+    estSavingsTokens: 0,
   };
 }
 

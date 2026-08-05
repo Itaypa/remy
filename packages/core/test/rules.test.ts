@@ -379,7 +379,10 @@ describe("waste signatures", () => {
     const f = yes.find((x) => x.tipId === "subagent-offload");
     expect(f).toBeDefined();
     expect(f!.evidence).toEqual({ reads: 15, ctx_pct: 70 });
-    expect(f!.estSavingsTokens).toBe((15 - 10) * 1_500);
+    // No token estimate: delegating COSTS metered tokens, it doesn't save
+    // them. What it buys is window headroom, which the copy already says and
+    // this field cannot express. It used to claim (reads-10)*1500.
+    expect(f!.estSavingsTokens).toBe(0);
 
     // pressure via auto-compact also qualifies
     const compacted = analyzeSession(snapshot({ toolCalls: wideReads, contextPct: 30, autoCompacts: 1 }));

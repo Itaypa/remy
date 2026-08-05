@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { openDb } from "../src/store";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   activeTip,
   CONTEXT_ALARM_THROTTLE_MS,
@@ -164,5 +167,53 @@ describe("tip engine", () => {
     dismissTip(db, "reread-churn", NOW);
     expect(openTips(db).map((t) => t.tip_id)).toEqual(["context-tax", "no-verify"]);
     expect(openTips(db, 1)).toHaveLength(1);
+  });
+
+  test("re-analysis refreshes an estimate downward, not just upward", () => {
+    // This was MAX(existing, new), which made it a high-water mark rather than
+    // a refresh: once a tip was filed with a big number it could never come
+    // down. That meant correcting a rule's arithmetic was inert for every row
+    // already in a user's DB — the stale, inflated figure went on winning the
+    // one active-tip slot, because promoteNext ranks by exactly this column.
+    const db = openDb(":memory:");
+    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 50 }, estSavingsTokens: 90_000 }], NOW);
+    expect(openTips(db)[0]!.est_savings_tokens).toBe(90_000);
+
+    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 20 }, estSavingsTokens: 5_000 }], NOW);
+    expect(openTips(db)[0]!.est_savings_tokens).toBe(5_000);
+    expect(openTips(db)).toHaveLength(1); // refreshed, not duplicated
+  });
+
+  test("a tip already filed with the old inflated subagent-offload estimate is corrected on open", () => {
+    // Tips persist, are only re-costed when the same rule fires again, and
+    // nothing expires them — so fixing the rule alone would leave an open row
+    // carrying the wrong number indefinitely.
+    const path = join(tmpdir(), `remy-mig-${Math.random().toString(36).slice(2)}.db`);
+    try {
+      const db = openDb(path);
+      (db as Database)
+        .query(
+          `INSERT INTO tips (tip_id, session_id, created_at, status, evidence, est_savings_tokens)
+           VALUES ('subagent-offload', 's1', ?, 'active', '{}', 22500)`,
+        )
+        .run(NOW);
+      // A database from before this migration existed has no marker for it.
+      (db as Database).query(`DELETE FROM sync_state WHERE key LIKE 'migration:%'`).run();
+      (db as Database).close();
+
+      // The next process to open this database is what applies the correction.
+      const reopened = openDb(path);
+      expect(activeTip(reopened)!.est_savings_tokens).toBe(0);
+
+      // And it must not undo a legitimate value on a later open, nor keep
+      // rewriting — the marker makes it one-shot.
+      (reopened as Database)
+        .query(`UPDATE tips SET est_savings_tokens = 7 WHERE tip_id = 'subagent-offload'`)
+        .run();
+      (reopened as Database).close();
+      expect(activeTip(openDb(path))!.est_savings_tokens).toBe(7);
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 });
