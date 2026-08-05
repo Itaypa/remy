@@ -693,3 +693,43 @@ describe("oversized tool results", () => {
     expect(JSON.stringify(stats)).not.toContain(marker);
   });
 });
+
+describe("classifyCommand — every member of every set", () => {
+  // These lists are written out deliberately rather than imported: they pin the
+  // CONTRACT ("pytest is a test runner"), so removing a member from the source
+  // fails here instead of silently changing what REMY believes. 24 of the 36
+  // members across these four sets were never mentioned by any test, and the
+  // failure direction is the harmful one — a runner that falls out of its set
+  // classifies as "other", and `no-verify` then tells someone who ran their
+  // tests that they shipped edits unverified. That is every Python user
+  // (pytest, ruff, flake8, mypy) and every JVM build (gradle, mvn).
+  const EXPECT: Array<[BashClass, string[]]> = [
+    ["test", ["jest", "vitest", "pytest", "mocha", "playwright", "cypress"]],
+    ["lint", ["eslint", "ruff", "biome", "prettier", "oxlint", "flake8", "mypy", "clippy"]],
+    ["build", ["tsc", "make", "webpack", "vite", "esbuild", "rollup", "gradle", "mvn"]],
+    ["read-cmd", ["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "ag", "ack", "find", "ls", "tree"]],
+  ];
+
+  for (const [expected, cmds] of EXPECT) {
+    for (const cmd of cmds) {
+      test(`${cmd} → ${expected}`, () => {
+        expect(classifyCommand(`${cmd} some/path`)).toBe(expected);
+      });
+    }
+  }
+
+  test("make test is a test run, not a build — the one documented exception", () => {
+    expect(classifyCommand("make test")).toBe("test");
+    expect(classifyCommand("make")).toBe("build");
+  });
+
+  test("a read command that writes or acts is not a read", () => {
+    // Same word, different intent. Checked across the whole set rather than on
+    // one example, because the guard is a single regex for all of them.
+    for (const cmd of ["cat", "grep", "find", "ls"]) {
+      expect(classifyCommand(`${cmd} x > out.txt`), `${cmd} with a redirect`).toBe("other");
+    }
+    expect(classifyCommand("find . -name '*.tmp' -delete")).toBe("other");
+    expect(classifyCommand("find . -exec rm {} ;")).toBe("other");
+  });
+});
