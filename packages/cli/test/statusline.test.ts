@@ -41,6 +41,12 @@ async function runStatusline(payload: Record<string, unknown>): Promise<string> 
   return out;
 }
 
+/** The statusline emits SGR codes and OSC 8 hyperlinks unconditionally, so
+ * assertions about *layout* have to read the text underneath them. */
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\]8;;[^\x07\x1b]*(\x07|\x1b\\)/g, "");
+}
+
 function basePayload(extra: Record<string, unknown> = {}) {
   return {
     session_id: "sess-1",
@@ -92,14 +98,26 @@ describe("coach statusline — one constant layout", () => {
 
   test("shows the current git branch, clean repo — no dirty marker", async () => {
     const out = await runStatusline(basePayload());
-    expect(out).toContain("🌿 main");
-    expect(out).not.toContain("🌿 main●");
+    expect(stripAnsi(out)).toContain("🌿 main");
+    expect(out).not.toContain("●");
   }, 10_000);
 
   test("shows a dirty marker when the repo has uncommitted changes", async () => {
     writeFileSync(join(repoDir, "a.txt"), "2");
     const out = await runStatusline(basePayload());
-    expect(out).toContain("🌿 main●");
+    expect(stripAnsi(out)).toContain("🌿 main ●");
+  }, 10_000);
+
+  test("the dirty marker never touches the branch name, and carries its own color", async () => {
+    // `main●` renders as a branch literally named that — the marker has to be
+    // separated and colored, or it reads as a typo rather than as state. The
+    // colour assertion is what keeps the space from being re-glued later: a
+    // bare `${branch}●` would satisfy a space-only check if someone padded
+    // the wrong side.
+    writeFileSync(join(repoDir, "a.txt"), "2");
+    const out = await runStatusline(basePayload());
+    expect(stripAnsi(out)).not.toContain("main●");
+    expect(out).toContain(`main \x1b[33m●`);
   }, 10_000);
 
   test("no git repo at cwd — statusline still renders, just without a branch field", async () => {

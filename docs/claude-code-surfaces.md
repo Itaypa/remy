@@ -125,7 +125,8 @@ the last tick, so a quiet session stays read-only.
 moved to the Stop-hook nudges above). Fields, in order: model (emoji + name)
 · context (`⚡ 48% ctx ▓▓▓░░` — percent + bar, colored yellow at ≥60% / red
 at ≥80%, but never restructuring the line) · git branch + dirty marker
-(`🌿 main●`, one `git status --porcelain=v1 --branch` subprocess, absent
+(`🌿 main ●`, the dot spaced and yellow so it isn't read as part of the
+branch name; one `git status --porcelain=v1 --branch` subprocess, absent
 outside a git repo — `gitStatus()` in `cli/src/index.ts`) · one **spend
 field, chosen by plan type — never both**: session cost (`$1.23`) for
 API/pay-per-token accounts, or rate-limit % (`⏳ 42% (5h)`, whichever of the

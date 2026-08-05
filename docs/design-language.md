@@ -64,8 +64,10 @@ carries an exact number.
   red at ≥80%, but the line keeps its shape. Current fields, in order: model
   (emoji + name) · context (`⚡ 48% ctx ▓▓▓░░` — percent + bar; the separate
   `[used/limit 🪙]` token-count badge was dropped as a duplicate of the same
-  number) · git branch + dirty marker (`🌿 main●`, from a single `git status
-  --porcelain=v1 --branch` call — absent outside a git repo) · session cost
+  number) · git branch + dirty marker (`🌿 main ●`, the dot spaced off the
+  name and yellow so it reads as state rather than as part of the branch;
+  from a single `git status --porcelain=v1 --branch` call — absent outside a
+  git repo) · session cost
   a **spend field, chosen by plan type — one or the other, never both**:
   session cost (`$1.23`) for API/pay-per-token accounts, or rate-limit %
   (`⏳ 42% (5h)`, whichever of the 5h/7d window is closer to its cap) for

@@ -586,7 +586,11 @@ async function statusline(): Promise<void> {
   const git = await gitStatus(cwd);
 
   const pctStr = pct >= 80 ? ansi("red", `${pct}%`) : pct >= 60 ? ansi("yellow", `${pct}%`) : `${pct}%`;
-  const branch = git.branch ? `🌿 ${git.branch}${git.dirty ? "●" : ""}` : null;
+  // The dirty dot is a state marker, not part of the name. Glued on in the
+  // default weight it renders as `main●` and reads as a branch literally
+  // called that; the space plus yellow puts it in the same "attention, not
+  // alarm" register the context percentage already uses.
+  const branch = git.branch ? `🌿 ${git.branch}${git.dirty ? ` ${ansi("yellow", "●")}` : ""}` : null;
   const parts = [
     `${modelEmoji(payload.model?.id)} ${payload.model?.display_name ?? "Claude"}`,
     `⚡ ${pctStr} ctx ${bar(pct, 5)}`,
