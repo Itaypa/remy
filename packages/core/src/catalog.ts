@@ -409,6 +409,7 @@ export const HINTS: string[] = [
   "🔀 Subagents keep your main context clean during big searches.",
   "⎋ Esc interrupts — steer early instead of paying for the wrong path.",
   "🗂 --resume picks up where you left off — cache-warm and cheaper.",
+  "🔖 Checkpoints are a session buffer, not a backup — commit before a risky agent run.",
   '💬 "Once there is a good plan, it will one-shot the implementation." — Boris Cherny',
   '💬 Self-verification is "worth 2–3x on the quality of the final result." — Boris Cherny',
   '💬 "A bad line of a plan could lead to hundreds of bad lines of code." — Dex Horthy',

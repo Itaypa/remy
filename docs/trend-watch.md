@@ -268,3 +268,68 @@ Note these are free-text-shaped names and would have to be hashed or enum-gated 
 - **The self-check that mattered:** REMY's own broken `bin/coach` path from an old dev
   build accounts for all 226 local PostToolUse hook entries, every one with a non-zero
   exit code. The mirror works, and the first thing it showed us was our own bug.
+
+---
+
+## 2026-08-06 — sweep 4
+
+A thin sweep, and the honest outcome is a rejection with a one-line deliverable. Recorded
+in full so no later sweep re-proposes it.
+
+Two areas the first three sweeps hadn't touched: permission modes / auto-accept, and git
+checkpoint hygiene. Sources: [the `--dangerously-skip-permissions` guide](https://www.morphllm.com/claude-code-dangerously-skip-permissions)
+(auto mode shipped March 2026 as the official middle ground; a December 2025 incident
+where `rm -rf … ~/` expanded to the user's home directory; Anthropic's own safeguards
+researcher running the flag only in a container), and
+[the checkpoints guide](https://likeone.ai/blog/claude-code-checkpoints-rewind-guide-2026/)
+("before every session on a complex project, run `git add . && git commit`… checkpoints
+are a working buffer for the session in front of you, not a permanent audit log", and
+"files Claude Code never touched were never snapshotted").
+
+### Findings
+
+| # | The mistake | Verdict |
+|---|---|---|
+| J1 / **M16** | **Uncommitted work at risk** — no clean baseline before an agent run | **rejected as a rule — measured.** See below |
+| J2 | **Blanket `--dangerously-skip-permissions`** | **out of lane** — CLAUDE.md deliberately keeps REMY out of the approval path (`PermissionRequest` is not registered, because stdout on that event is an allow/deny decision). Coaching someone's safety posture is not this product |
+
+### Why M16 was rejected, in numbers
+
+The taxonomy had it as `planned (unscheduled)`, blocked on "would need a git status probe
+at SessionStart (hook-time budget + privacy encoding TBD)". **That blocker text was
+stale** — `gitStatus` already shells `git status --porcelain` on every statusline tick at
+≤10ms, and a bucketed integer needs no schema change. The row is now corrected. But
+removing the stated blocker only exposed the real ones:
+
+- **It fires on 8 of 15 edit-bearing local sessions — 53%.** One tip slot, half of all
+  working sessions.
+- **No discriminator separates the two groups.** The session with the most edits (309)
+  committed 7 times; the second (280 edits) committed zero. Wall-clock span overlaps
+  completely (40 min to 9,460 min on the no-commit side, 113 to 12,342 on the other), and
+  so does distinct files touched (34 files / 0 commits vs 40 files / 8 commits).
+- **The session is the wrong unit of attribution, and this is the disqualifier.** 10 of 14
+  edit-bearing sessions in this repo overlap in wall-clock with *another* session in the
+  same repo — 71%. Concretely: session `7ba1caf9` made 29 edits and zero commits while
+  commit `221ee58` landed from a different window at the same time. REMY would have said
+  "you never committed" to someone who was committing. That is G3's category error, at 71%
+  rather than in theory.
+- **No 🪙 denominator, so it can never surface anyway.** `promoteNext` orders by
+  `est_savings_tokens DESC`; a finding with no derivable number sits queued behind every
+  tip that has one — the mechanism that killed S5. The only escape would be publishing a
+  fabricated `P(loss) × spend`, which this product does not do.
+- **Zero local population of the harm.** No destructive git command against a working tree
+  appears anywhere in the corpus.
+- **And REMY already says it, in the right register.** The statusline renders `🌿 main ●`
+  from the same `git status` call — a tip repeating the HUD is a nag layered on
+  information.
+
+**What ships instead:** one hints-deck line, carrying the part that is genuinely
+non-obvious — that host checkpoints are a session buffer and never covered files the agent
+didn't touch. Deliberately *not* the practitioner's literal fix: `git add .` stages
+untracked junk and secrets, and REMY should not put its brand on that.
+
+**What would revive it:** not a better threshold — a measured harm. Observing a
+destructive git command (`reset --hard`, `checkout --`, `clean -fd`) against the session's
+own cwd *after* N edits would make the estimate a real number: the tokens already spent
+producing the discarded work, which `spendTokens` already holds. That is `cache-idle`'s
+shape rather than a warning about a state. Population today: zero.
