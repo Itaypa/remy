@@ -3,6 +3,7 @@ import { mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envVar } from "./env";
+import { Hash16, ModelStr } from "./schema";
 import type { SessionEvent } from "./schema";
 
 /** `~/.remy`, unless an install predates the rename — then its `~/.coach`
@@ -266,17 +267,28 @@ export function insertEvent(db: Database, ev: SessionEvent): void {
   );
 }
 
+/** The `sessions` row is written from the statusline payload, which is host
+ * input — and unlike `events`, it never passes through `sanitizeEvent`. That
+ * made this the one write site where a string reached the DB with no charset
+ * gate at all, which is exactly the guarantee CLAUDE.md claims for every
+ * stored string. The gates below are that guarantee, in the same spirit as
+ * the coercion in `setClaudeMdBytes`: a value that doesn't parse is stored as
+ * NULL, and COALESCE reads NULL as "leave what we already knew" — so a
+ * malformed field loses one update rather than overwriting a good value with
+ * a guess. */
 export function upsertSession(
   db: Database,
   s: { session_id: string; ts: string; model?: string; cwd_hash?: string },
 ): void {
+  const model = ModelStr.safeParse(s.model).data ?? null;
+  const cwdHash = Hash16.safeParse(s.cwd_hash).data ?? null;
   db.query(
     `INSERT INTO sessions (session_id, started_at, model, cwd_hash)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(session_id) DO UPDATE SET
        model = COALESCE(excluded.model, sessions.model),
        cwd_hash = COALESCE(excluded.cwd_hash, sessions.cwd_hash)`,
-  ).run(s.session_id, s.ts, s.model ?? null, s.cwd_hash ?? null);
+  ).run(s.session_id, s.ts, model, cwdHash);
 }
 
 /** Record the CLAUDE.md byte count for a session. Coerces to a whole number

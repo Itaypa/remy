@@ -188,6 +188,42 @@ describe("privacy gate", () => {
     expect(getSession(db, "s1")!.claude_md_bytes).toBe(8_920);
   });
 
+  test("a hostile value cannot reach the sessions.model column — the statusline payload is host input", () => {
+    // sessions rows are written from the statusline payload, which never goes
+    // through sanitizeEvent. Before the gate in upsertSession, `model` was
+    // passed straight to the INSERT, so this column was the one stored string
+    // with no charset check anywhere in its path.
+    const db = openDb(":memory:");
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:00:00.000Z", model: `/Users/x/${MARKER}` });
+    expect(getSession(db, "s1")!.model).toBeNull();
+
+    // A rejected value must not clobber a good one either: NULL means "leave
+    // what we already knew", not "overwrite with nothing".
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:01:00.000Z", model: "claude-fable-5" });
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:02:00.000Z", model: `secret ${MARKER}` });
+    expect(getSession(db, "s1")!.model).toBe("claude-fable-5");
+
+    // cwd_hash is gated the same way — only a 16-hex hash lands.
+    upsertSession(db, { session_id: "s2", ts: "2026-07-26T10:00:00.000Z", cwd_hash: `/Users/x/${MARKER}` });
+    expect(getSession(db, "s2")!.cwd_hash).toBeNull();
+
+    const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
+    expect(dump).not.toContain(MARKER);
+    expect(dump).not.toContain("/Users");
+  });
+
+  test("the model ids the host actually emits survive the gate", () => {
+    // The charset admits these two deliberately (see ModelStr): dropping them
+    // would trade a privacy hole for silently losing which model ran. Both are
+    // bounded identifiers — the regression to guard is someone "tightening"
+    // the regex back and blanking the column for every 1M-context user.
+    const db = openDb(":memory:");
+    for (const id of ["claude-opus-5[1m]", "claude-opus-4-8[1m]", "<synthetic>", "anthropic.claude-3-5-v2:0"]) {
+      upsertSession(db, { session_id: id, ts: "2026-07-26T10:00:00.000Z", model: id });
+      expect(getSession(db, id)!.model).toBe(id);
+    }
+  });
+
   test("contextFromPayload carries no content — numbers and a model id only", () => {
     const ctx = contextFromPayload({
       cwd: `/Users/x/${MARKER}`,

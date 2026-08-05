@@ -13,7 +13,14 @@ export const HOST = "claude-code";
 export const ISO_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 export const IsoTs = z.string().max(40).regex(ISO_TS_RE);
 export const IdStr = z.string().min(1).max(128).regex(/^[\w.:-]+$/);
-export const ModelStr = z.string().min(1).max(80).regex(/^[\w.:-]+$/);
+// The host emits two shapes this charset originally excluded, both bounded
+// identifiers rather than free text: `claude-opus-5[1m]` for the 1M-context
+// variants, and `<synthetic>` for placeholder turns that carry no usage. They
+// were reaching sessions.model anyway (see upsertSession — the write site had
+// no gate), so the honest fix is to admit them here and then enforce it, not
+// to keep a regex that production data already violates. Still no "/", no
+// whitespace, still capped: path-shaped values remain structurally impossible.
+export const ModelStr = z.string().min(1).max(80).regex(/^[\w.:<>\[\]-]+$/);
 export const Hash16 = z.string().regex(/^[0-9a-f]{16}$/);
 export const HostStr = z.string().min(1).max(32).regex(/^[a-z0-9-]+$/);
 export const HostVersionStr = z.string().min(1).max(32).regex(/^[\w.-]+$/);
