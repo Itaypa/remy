@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TIPS, type SessionRow, type TipRow } from "@ccpp/core";
-import { renderReport, renderWeek, weekTotals } from "../src/ui";
+import { renderReport, renderWeek, tipVars, weekTotals } from "../src/ui";
 
 // /remy and /remy-week are the two surfaces a user deliberately opens, and
 // neither had any assertions — the end-to-end driver only checked that they
@@ -189,5 +189,38 @@ describe("renderWeek", () => {
     expect(out).toContain("2 sessions");
     expect(out).toContain("waste caught: 3 tips");
     expect(out).toContain("120k 🪙 recoverable");
+  });
+});
+
+describe("tip template variables", () => {
+  test("a measured value beats the catalog fallback, and est beats both", () => {
+    // The precedence this pins was duplicated across two render sites and
+    // guarded by neither: flipping either copy made a fallback outrank a real
+    // measurement — the user shown generic words where a number existed — with
+    // the whole suite still green.
+    const def = TIPS["context-tax"]!;
+    expect(def.fallbacks?.skill_k).toBeDefined();
+
+    // No measurement: the fallback fills in.
+    expect(tipVars(def, {}).skill_k).toBe(def.fallbacks!.skill_k);
+    // A measurement: it wins.
+    expect(tipVars(def, { skill_k: "~9.9k tokens" }).skill_k).toBe("~9.9k tokens");
+    // Caller extras are applied last.
+    expect(tipVars(def, { est: "1k" }, { est: "999k" }).est).toBe("999k");
+  });
+
+  test("the report prints the session's own number, not the fallback", () => {
+    // The same invariant through the real render path, which is where it bites.
+    const out = renderReport({
+      session: session(),
+      tips: [],
+      active: tip({
+        tip_id: "context-tax",
+        evidence: JSON.stringify({ pct: 48, first_tokens: 96_000, skill_k: "~9.9k tokens" }),
+        est_savings_tokens: 81_000,
+      }),
+    });
+    expect(out).toContain("~9.9k tokens");
+    expect(out).not.toContain(TIPS["context-tax"]!.fallbacks!.skill_k!);
   });
 });

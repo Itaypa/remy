@@ -109,6 +109,22 @@ export const linkify = (s: string, url: string | undefined): string =>
 /** "Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙" — problem
  * → solution, plus a value clause appended here (not baked into `short`) so
  * wisdom tips (no est) render as problem → solution with nothing dangling. */
+/** Template variables for a tip row, in the one precedence that is correct:
+ * the catalog's fallbacks underneath, the row's own evidence on top, and any
+ * caller-supplied extras (`est`) last.
+ *
+ * Extracted because it was written out twice — here and in the report — and
+ * an ordering duplicated in two places is an ordering nothing checks. Flipping
+ * either copy made a measured value lose to the generic fallback, silently,
+ * with the whole suite still green. */
+export function tipVars(
+  def: TipDef,
+  evidence: Record<string, string | number>,
+  extra: Record<string, string | number> = {},
+): Record<string, string | number> {
+  return { ...def.fallbacks, ...evidence, ...extra };
+}
+
 function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
   let evidence: Record<string, string | number> = {};
   try {
@@ -117,8 +133,7 @@ function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
     // evidence is display-only
   }
   const value = tip.est_savings_tokens > 0 ? ` → +${fmtTok(tip.est_savings_tokens)} 🪙` : "";
-  // Fallbacks first so a real measurement always wins over the default.
-  const rendered = renderTemplate(template, { ...def.fallbacks, ...evidence });
+  const rendered = renderTemplate(template, tipVars(def, evidence));
   // Not every tip row carries the evidence its template asks for: the adaptive
   // analyzer files tips with evidence {source:"adaptive"} and no session
   // numbers at all (adapt.ts), and it may pick any catalog id, including a
@@ -332,10 +347,10 @@ export function renderReport(opts: {
       try {
         evidence = opts.active.evidence ? JSON.parse(opts.active.evidence) : {};
       } catch {}
-      // Same merge order as tipBody: a stored row from an older version, or an
-      // adaptive row with no session numbers, still renders a whole sentence
-      // here — this path has no title fallback to catch a stray placeholder.
-      const vars = { ...def.fallbacks, ...evidence, est: fmtTok(opts.active.est_savings_tokens) };
+      // A stored row from an older version, or an adaptive row with no session
+      // numbers, still renders a whole sentence here — this path has no title
+      // fallback to catch a stray placeholder.
+      const vars = tipVars(def, evidence, { est: fmtTok(opts.active.est_savings_tokens) });
       lines.push(`│ ${def.emoji} ${def.title}`);
       // Labeled rows: what happened → what it's worth → what to do. The
       // adaptive analyzer's own sentence (with the user's numbers) replaces
