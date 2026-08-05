@@ -194,3 +194,77 @@ Measured consequences:
   REMY would coach its own author for something he does deliberately every night. Its fix
   ("a worktree per code-writing agent") also has no metadata signature, so the tip could
   never be observed to have worked, and would re-fire forever. Demoted to a hints-deck line.
+
+---
+
+## 2026-08-06 — sweep 3
+
+Started by re-checking ground truth rather than searching for new mistakes, which turned
+out to be the higher-yield move: **a sweep-1 verdict was wrong and is now overturned.**
+
+### The correction: `effort` is observable, and F4's blocker never existed
+
+Sweep 1 rejected F4 (extended thinking / effort left high) because the Opus seat
+enumerated every key inside `message.usage`, found no thinking count, and concluded the
+effort setting "rides on no hook payload we receive." It had looked one level too deep.
+**`effort` is a top-level field on each transcript entry**, a sibling of `type` and
+`message`. Verified twice, independently:
+
+- Deduped by `message.id` (the streaming rule `parseTranscript` uses): `effort` present on
+  **4,065 of 4,077** main-chain turns. The 12 without it are all `<synthetic>` or
+  API-error entries carrying zero output — so it is on **100% of real billed turns**.
+- Values locally: `high` (3,569 turns), `max` (496). No `low`/`medium`/`none` ever seen.
+- Subagent transcripts carry their own `effort` too (493 `high`, 7 `max`).
+- `parseTranscript` walks straight past it; the insertion point is free.
+
+**And a number of mine was wrong.** My first pass reported max turns producing ~2× the
+output of high turns. That is a model-mix artifact: `max` occurs *only* on fable-5 and
+opus-4-8, while opus-5 and sonnet-5 — which never run max — drag the `high` mean down.
+Held within model it is **~1.5×**, and even that is confounded with task difficulty, since
+max turns are plausibly the harder turns. **No multiplier ships.** One thing does survive:
+mean context is *lower* on max turns (222,911 vs 245,336), so unlike sweep 1's rejected
+output/input fallback this signal is not a disguised `1/context`.
+
+The sweep-1 revisit trigger ("the day a thinking count appears in `usage`") is still
+**unmet** — `effort` is a knob, not a count. Thinking still bills into `output_tokens`
+inseparably.
+
+### A bigger find, unlooked for: the host is attributing turns for us
+
+Assistant entries carry top-level `attributionSkill` (2,042 locally),
+`attributionMcpServer` (854), `attributionMcpTool` (854) and `attributionPlugin` (142) —
+e.g. `attributionSkill:"night-shift"` ×1,204, `attributionMcpServer:"Claude Browser"` ×808.
+The host is telling the transcript which skill, MCP server or plugin a turn belongs to.
+That is the "configured half" F1 (idle MCP servers) was parked for in sweep 1, and a large
+part of what S12's attribution had to infer. Logged as S19; it likely unparks F1 outright.
+Note these are free-text-shaped names and would have to be hashed or enum-gated at ingest.
+
+### Findings
+
+| # | The mistake | Measured locally | Verdict |
+|---|---|---|---|
+| H2 | **Whole-file reads** — `Read` returning an entire large file where a slice was asked for | `Read` result sizes p50 2,179 chars, **p95 117,944, max 471,536 (~118k tokens in one result)**; 7.78M chars ≈ **1.95M tokens from Read results alone**. Bimodal: 2 of 13 sessions have ≥3 oversized reads, the rest have zero | **spec'd — S17** |
+| F4′ | **Effort drift** — `/effort` is sticky and outlives the hard step it was set for | 0 all-max sessions, 1 mixed, 17 never max — and the mixed one is this repo's own night loop, which flips to max at turn 4 and never back | **collect only — S18** |
+| H1a | **Hook-injected context** — hooks that inject on every event | `SessionStart:startup` injects **170,505 chars (~43k tokens, ~950/session)**; `Stop` 9,667 chars over 141 fires. Attachment entries carry `hookName`, `hookEvent`, `durationMs`, `exitCode` | **fold into `context-tax` attribution — S20** |
+| H1b | **Slow hooks** — a 2s PreToolUse hook × thousands of calls | Measured means: 4–8ms PostToolUse, 37ms Stop, 206ms SessionStart. **Zero local instances** of the reported magnitude | **rejected** — see below |
+| — | The reported "12k-token `npm test` log" | Backwards locally: Bash is the **best**-behaved tool, p95 2,222 chars. The waste is `Read`, not shell output | folded into H2 |
+
+### Verdict notes
+
+- **H1b rejected on three independent grounds.** Wrong unit: it is wall-clock
+  milliseconds, and a tip with no 🪙 value clause loses the single active slot to every
+  tip that has one. Wrong subject: hooks are configuration, often a plugin's rather than
+  the driver's — locally *every* PostToolUse hook across 14,858 entries is REMY's own, so
+  the rule would coach the developer for a plugin author's choice. And no population: the
+  reported 2s-per-call magnitude has never once been observed here.
+- **F4′ collected, not shipped, and the framing changed.** Seat B's reframe is the one
+  that survives: firing on *"you used max effort"* punishes a dial the user deliberately
+  turned minutes ago — F2 redux with a different knob — and it fires most reliably in the
+  sessions where max was most justified. What is a real mistake is **drift**: the setting
+  outliving its reason, the same shape as `cache-idle`. But the only local instance is
+  this repo's own automation, so any rule calibrated today would be tuned to fire on its
+  own author, at a screen nobody is watching. Collect; unpark when a human session
+  inherits max at start, or when a `low`/`medium` value is ever observed.
+- **The self-check that mattered:** REMY's own broken `bin/coach` path from an old dev
+  build accounts for all 226 local PostToolUse hook entries, every one with a non-zero
+  exit code. The mirror works, and the first thing it showed us was our own bug.
