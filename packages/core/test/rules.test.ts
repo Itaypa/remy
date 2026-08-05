@@ -465,6 +465,22 @@ describe("habit rules", () => {
     expect(f!.estSavingsTokens).toBe(Math.round(0.8 * 4 * 11_000));
   });
 
+  test("a session is trivial only if it is light on BOTH counts", () => {
+    // The heavy fixture is heavy in tool calls AND output, so either gate alone
+    // carried the suite: raising the tool-call ceiling from 5 to 500 broke
+    // nothing. Each dimension is now pinned on its own, because widening either
+    // one makes model-fit start calling real work "a quick question".
+    const chatty = () =>
+      sessionRow({ model: "claude-opus-4-8", tool_calls: 40, tokens_in: 10_000, tokens_out: 500 });
+    const verbose = () =>
+      sessionRow({ model: "claude-opus-4-8", tool_calls: 2, tokens_in: 10_000, tokens_out: 50_000 });
+
+    // Many tool calls, little output — real work, not a trivial question.
+    expect(analyzeHabits([chatty(), chatty(), chatty(), chatty()])).toHaveLength(0);
+    // Few tool calls, lots of output — also real work.
+    expect(analyzeHabits([verbose(), verbose(), verbose(), verbose()])).toHaveLength(0);
+  });
+
   test("model-fit stays quiet under threshold, when heavy use dominates, or off-tier", () => {
     expect(analyzeHabits([trivialOpus(), trivialOpus(), trivialOpus()])).toHaveLength(0);
 
@@ -487,6 +503,30 @@ describe("habit rules", () => {
     expect(shouldSuppressPlanMode([planned(), planned(), direct(), planned(), direct()])).toBe(true);
     expect(shouldSuppressPlanMode([planned(), planned(), direct(), direct(), direct()])).toBe(false);
     expect(shouldSuppressPlanMode([planned(), planned(), planned(), planned()])).toBe(false);
+  });
+
+  test("either delegation tool proves you delegated — Task and Agent both count", () => {
+    // subagent-offload only fires when the session delegated NOTHING. Only
+    // `Task` was ever exercised, so dropping "Agent" from SUBAGENT_TOOLS broke
+    // no test — and the tip would then have told someone who used the Agent
+    // tool that they should try using a subagent.
+    const wideReads = Array.from({ length: 15 }, (_, i) =>
+      call("Read", true, `${i}`.padStart(16, "0")),
+    );
+    expect(
+      analyzeSession(snapshot({ toolCalls: wideReads, contextPct: 70 })).some(
+        (x) => x.tipId === "subagent-offload",
+      ),
+    ).toBe(true);
+    for (const tool of ["Task", "Agent"] as const) {
+      const delegated = analyzeSession(
+        snapshot({ toolCalls: [...wideReads, call(tool, true, null)], contextPct: 70 }),
+      );
+      expect(
+        delegated.some((x) => x.tipId === "subagent-offload"),
+        `${tool} should count as delegation`,
+      ).toBe(false);
+    }
   });
 
   test("read-in-slices fires on 3+ whole-file results, and prices only the excess", () => {

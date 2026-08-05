@@ -95,6 +95,20 @@ describe("transcript parser", () => {
     expect(stats.toolCalls[2]!.ok).toBe(true);
   });
 
+  test("every plan-mode tool name counts — including the snake_case one", () => {
+    // Only ExitPlanMode was ever exercised, so dropping either of the other two
+    // names broke no test. The failure is a false positive on someone who did
+    // the right thing: plan mode goes undetected and the plan-mode tip fires at
+    // a user who planned.
+    for (const name of ["ExitPlanMode", "EnterPlanMode", "exit_plan_mode"]) {
+      const text = assistantLine({ id: "m1", usage: { input_tokens: 10 }, content: [use("t1", name)] });
+      expect(parseTranscript(text, 200_000).usedPlanMode, `${name} should mark plan mode`).toBe(true);
+    }
+    // A tool that merely looks similar does not count.
+    const nope = assistantLine({ id: "m1", usage: { input_tokens: 10 }, content: [use("t1", "PlanSomething")] });
+    expect(parseTranscript(nope, 200_000).usedPlanMode).toBe(false);
+  });
+
   test("every edit tool counts as an edit — Write included", () => {
     // editCalls is the input to no-verify and plan-mode, and only Edit was
     // ever exercised here: dropping Write from EDIT_TOOLS broke no test, so a
