@@ -534,9 +534,18 @@ function syncSessionStats(
     const costChanged = cost !== undefined && cost !== row.cost_usd;
     const pctChanged = pct > row.max_context_pct;
     const windowChanged = windowSize != null && windowSize !== row.context_window;
-    const identityChanged = (model !== undefined && model !== row.model) || cwdHash !== row.cwd_hash;
+    // The statusline sees the model in the chair right now; the analysis pass
+    // sees which one did the session's work and writes that (transcript.ts).
+    // Only seed it here — once analysis has spoken, a live "opus" over a
+    // dominant "sonnet" would flip the column back on the very next tick, and
+    // this runs ~1/s, so it would also mean a write per second for the whole
+    // session. Seeding keeps a never-analyzed session from having no model.
+    const seedModel = row.model === null ? model : undefined;
+    const identityChanged = (seedModel !== undefined && seedModel !== row.model) || cwdHash !== row.cwd_hash;
     if (!costChanged && !pctChanged && !windowChanged && !identityChanged) return;
-    if (identityChanged) upsertSession(db, { session_id: sessionId, ts: new Date().toISOString(), model, cwd_hash: cwdHash });
+    if (identityChanged) {
+      upsertSession(db, { session_id: sessionId, ts: new Date().toISOString(), model: seedModel, cwd_hash: cwdHash });
+    }
     if (costChanged || pctChanged || windowChanged) {
       db.query(
         `UPDATE sessions SET cost_usd = COALESCE(?, cost_usd), max_context_pct = MAX(max_context_pct, ?), context_window = COALESCE(?, context_window) WHERE session_id = ?`,

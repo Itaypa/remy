@@ -318,6 +318,71 @@ describe("cache-expiry detection (timestamp-verified idle gaps that re-wrote a f
     expect(stats.cacheExpiries).toBe(0);
   });
 
+  test("the session's model is the one that did the work, not the one that spoke last", () => {
+    // The shape that motivated this: a long session on one model with a short
+    // detour to another at the end. Under last-seen, one closing question on
+    // the top tier relabels the whole session — and `model-fit` then bills all
+    // of its tokens to opus.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "a1", model: "claude-sonnet-5", usage: { output_tokens: 40_000 } }),
+        assistantLine({ id: "a2", model: "claude-sonnet-5", usage: { output_tokens: 35_000 } }),
+        assistantLine({ id: "a3", model: "claude-opus-5", usage: { output_tokens: 500 } }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.model).toBe("claude-sonnet-5");
+  });
+
+  test("a burst of short turns doesn't outvote the model that generated the work", () => {
+    // Why output tokens rather than turn count: five one-line answers should
+    // not outrank one long generation.
+    const lines = [assistantLine({ id: "big", model: "claude-opus-5", usage: { output_tokens: 60_000 } })];
+    for (let i = 0; i < 5; i++) {
+      lines.push(assistantLine({ id: `s${i}`, model: "claude-haiku-4-5", usage: { output_tokens: 200 } }));
+    }
+    expect(parseTranscript(lines.join("\n"), 200_000).model).toBe("claude-opus-5");
+  });
+
+  test("synthetic turns never win the attribution, and never blank it", () => {
+    // The host writes placeholder turns carrying no usage and the literal model
+    // "<synthetic>". They are not a model anyone chose.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "a1", model: "claude-fable-5", usage: { output_tokens: 900 } }),
+        assistantLine({ id: "a2", model: "<synthetic>", usage: { output_tokens: 0 } }),
+        assistantLine({ id: "a3", model: "<synthetic>", usage: { output_tokens: 0 } }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.model).toBe("claude-fable-5");
+  });
+
+  test("a session with no output tokens still attributes, by turns", () => {
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "a1", model: "claude-haiku-4-5", usage: {} }),
+        assistantLine({ id: "a2", model: "claude-haiku-4-5", usage: {} }),
+        assistantLine({ id: "a3", model: "claude-opus-5", usage: {} }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.model).toBe("claude-haiku-4-5");
+  });
+
+  test("sidechain turns don't vote — a subagent's model is not the session's", () => {
+    // Subagents run on their own model (often haiku). Counting their output
+    // would let delegated work rename the session the user is actually in.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "a1", model: "claude-opus-5", usage: { output_tokens: 5_000 } }),
+        assistantLine({ id: "s1", model: "claude-haiku-4-5", sidechain: true, usage: { output_tokens: 90_000 } }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.model).toBe("claude-opus-5");
+  });
+
   test("a model switch re-writes legitimately — excluded even across a gap", () => {
     const stats = parseTranscript(
       [

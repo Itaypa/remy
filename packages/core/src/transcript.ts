@@ -166,6 +166,50 @@ function postCompactTokens(entry: any): number | null {
   return typeof post === "number" && post >= 0 ? post : null;
 }
 
+/** Turns the host writes with no model behind them — placeholder entries that
+ * carry zero usage. They are not a model anyone chose and must never win an
+ * attribution. */
+const SYNTHETIC_MODEL = "<synthetic>";
+
+/** Which model actually did this session's work, weighted by the output tokens
+ * it produced.
+ *
+ * The obvious reading — "whatever model the last assistant turn used" — is
+ * what this replaces, and it is wrong in a way that matters: sessions switch
+ * models mid-flight (one local session ran 1,091 sonnet turns, 183 fable and
+ * 40 opus, and recorded a single value), and `sessions.model` is what the
+ * cross-session habit rules reason over. Under last-seen, one closing question
+ * on the top tier relabels an entire sonnet session as an opus session, and
+ * `model-fit` then attributes all of its tokens to opus.
+ *
+ * Output tokens rather than turn count or input tokens: it is the work the
+ * model actually did. Turn count would let a burst of one-line answers outvote
+ * an hour of generation, and input tokens mostly measure how big the context
+ * had grown by then, which is the same for whichever model is in the chair.
+ * Falls back to turn count when nothing produced output (a session of empty or
+ * synthetic turns), and returns null when there is nothing to go on at all —
+ * the caller keeps its previous last-seen value rather than inventing one. */
+function dominantModel(turns: Array<{ usage: Usage; model: string | null }>): string | null {
+  const byOut = new Map<string, number>();
+  const byTurns = new Map<string, number>();
+  for (const t of turns) {
+    if (!t.model || t.model === SYNTHETIC_MODEL) continue;
+    byOut.set(t.model, (byOut.get(t.model) ?? 0) + (t.usage?.output_tokens ?? 0));
+    byTurns.set(t.model, (byTurns.get(t.model) ?? 0) + 1);
+  }
+  if (byTurns.size === 0) return null;
+  const rank = [...byOut.values()].some((n) => n > 0) ? byOut : byTurns;
+  let best: string | null = null;
+  let bestN = -1;
+  for (const [m, n] of rank) {
+    if (n > bestN) {
+      best = m;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
 export function parseTranscript(text: string, limit = contextLimit()): TranscriptStats {
   // Streaming writes repeat a message id with growing usage — keep the last.
   const usageById = new Map<string, Usage>();
@@ -305,7 +349,7 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   const contextTokens = contextNow ?? 0;
   const toolCalls = toolOrder.map((t) => t.call);
   return {
-    model,
+    model: dominantModel(mainTurns) ?? model,
     totals,
     contextTokens,
     contextPct: Math.min(100, Math.round((contextTokens / limit) * 100)),
