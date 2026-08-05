@@ -1,7 +1,7 @@
 // Curated tip catalog — written once, reused by every host adapter.
 // `short` templates render into every tip surface (statusline, splash,
 // Stop-hook nudge — they all share one format) as
-// "[🐭REMY]: {emoji} {problem} → {solution}" (the caller — tipLine() in
+// "[🐭 REMY]: {emoji} {problem} → {solution}" (the caller — tipLine() in
 // cli/src/ui.ts — adds the bracketed brand tag and, when the finding has a
 // quantified savings estimate, a trailing "→ +{est} 🪙" value clause). Write
 // `short` itself as "{problem} → {solution}" — no brand, no value clause,
@@ -12,7 +12,7 @@
 // ≤110 chars rendered — every rule-backed tip needs one.
 
 /** Product name shown with every tip. */
-export const BRAND = "🐭REMY";
+export const BRAND = "🐭 REMY";
 
 export interface TipCite {
   /** Publication or site name, e.g. "Claude Code docs", "The Pragmatic Engineer". */

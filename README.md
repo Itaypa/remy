@@ -75,7 +75,7 @@ you, and he never touches your code.
 ```
   ,__,         REMY v0.3.0
  (o,o)         last 7d: 12 sessions · 6.4M 🪙
- (")_(")~~~    [🐭REMY]: 🔨 you edited one file 56× this session → +265k 🪙
+ (")_(")~~~    [🐭 REMY]: 🔨 you edited one file 56× this session → +265k 🪙
 ```
 
 ## What it does

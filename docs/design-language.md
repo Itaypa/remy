@@ -43,7 +43,7 @@ carries an exact number.
 | ✅ Coin | ❌ not Coin |
 |---|---|
 | `💡 Plan mode before big tasks — fewer wrong turns, fewer tokens.` | `Warning: plan mode usage below recommended threshold.` |
-| `[🐭REMY]: context at 85% — every reply re-reads 170k 🪙` | `Context utilization high. Consider compacting.` |
+| `[🐭 REMY]: context at 85% — every reply re-reads 170k 🪙` | `Context utilization high. Consider compacting.` |
 | `✨ clean session — nothing wasteful detected` | `No issues found.` |
 | `~200k 🪙 recoverable` | `Potential savings detected.` |
 
@@ -93,13 +93,13 @@ carries an exact number.
   `cli/src/ui.ts`) renders the statusline tag, the session-start splash
   line, and the Stop-hook tip nudge — they are byte-for-byte identical, not
   three related formats. The bracketed, colon-suffixed product name (`BRAND`
-  in `core/src/catalog.ts` — currently "🐭remy") is the entire signal that a
+  in `core/src/catalog.ts` — currently "🐭 REMY") is the entire signal that a
   line is a coaching message — no separate persona voice, no other label
   needed. The two arrows are load-bearing: problem (what the coach saw, with
   a number) → solution (the one imperative action) → value (`+{est} 🪙`,
   omitted when there's nothing quantified — most wisdom tips). `TipDef.short`
   holds only `"{problem} → {solution}"` — no brand, no value clause, no
-  `{est}` placeholder; `tipLine()` composes the rest: `[🐭REMY]: 🔨 Same file
+  `{est}` placeholder; `tipLine()` composes the rest: `[🐭 REMY]: 🔨 Same file
   edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`. An earlier version
   voiced the Stop-hook nudge with a separate fictional mascot ("Byte:")
   instead of the bracket, specifically to avoid misattributing advice to the
@@ -114,7 +114,7 @@ carries an exact number.
   exclusive per Stop (never both, so a turn ending never produces two
   systemMessages): an overflowing context takes priority as the more urgent
   problem.
-  - **Tip nudge** — `tipLine()`, same as everywhere else: `[🐭REMY]: 🔨 Same
+  - **Tip nudge** — `tipLine()`, same as everywhere else: `[🐭 REMY]: 🔨 Same
     file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`. Throttled
     (`dueForStopNudge()` in `core/src/tips.ts`, `STOP_NUDGE_THROTTLE_MS` =
     10 min, tracked in its own `tip_memory.last_stop_nudge_at` column,
@@ -123,7 +123,7 @@ carries an exact number.
     splash far more often than real turns happen, and an earlier version
     that shared the column let that silently reset this throttle right when
     it needed to fire).
-  - **Context alarm** — `contextAlarmLine()`: `[🐭REMY]: context at 92% —
+  - **Context alarm** — `contextAlarmLine()`: `[🐭 REMY]: context at 92% —
     every reply re-reads 184k 🪙`. Fires at ctx≥80%, throttled tighter than
     the tip nudge (`dueForContextAlarm()`, `CONTEXT_ALARM_THROTTLE_MS` =
     3 min, keyed by session id in `sync_state`) — an active, worsening
@@ -159,7 +159,7 @@ carries an exact number.
   **Wide-surface copy (`TipDef.live`, rendered by `tipLineLong()`).** Same
   skeleton as everywhere else — `[Brand]: {emoji} problem → solution →
   value` — but the problem clause is the long form, spoken to the player
-  with the session's own numbers: `[🐭REMY]: 🔨 you edited one file 56× this
+  with the session's own numbers: `[🐭 REMY]: 🔨 you edited one file 56× this
   session, re-reading between tries → /clear and re-brief beats another go
   → +265k 🪙`. Every rule-backed tip carries one (≤110 chars rendered,
   enforced in `catalog.test.ts`, and it must contain a number from the

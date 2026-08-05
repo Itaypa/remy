@@ -133,7 +133,7 @@ function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
 /** Non-global on purpose: a /g regex carries lastIndex between .test() calls. */
 const UNRESOLVED_PLACEHOLDER = /\{\w+\}/;
 
-/** "[🐭REMY]: 🔨 Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙"
+/** "[🐭 REMY]: 🔨 Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙"
  * — one format for every tip surface: the statusline, the session-start
  * splash, and the Stop-hook nudge all call this. The bracketed brand tag is
  * the whole signal this is a coaching message, not a stats line. */
@@ -145,7 +145,7 @@ export function tipLine(tip: TipRow): string {
 
 /** The same line, wide-surface form: `TipDef.live` instead of `short`, so a
  * surface with room gets the session's own evidence spoken back to the
- * player — "[🐭REMY]: 🔨 you edited one file 56× this session, re-reading
+ * player — "[🐭 REMY]: 🔨 you edited one file 56× this session, re-reading
  * between tries → /clear and re-brief beats another go → +265k 🪙". Same
  * skeleton as tipLine() (brand · emoji · problem → solution → value), just
  * the long problem clause; wisdom tips have no evidence and fall back to
@@ -156,7 +156,7 @@ export function tipLineLong(tip: TipRow): string {
   return `[${BRAND}]: ${def.emoji} ${tipBody(tip, def, def.live ?? def.short)}`;
 }
 
-/** "[🐭REMY]: context at 92% — every reply re-reads 184k 🪙" — the
+/** "[🐭 REMY]: context at 92% — every reply re-reads 184k 🪙" — the
  * context-overflow alarm, moved off the statusline (it used to replace the
  * whole line at ctx>=80%) onto the Stop-hook nudge, so the statusline stays
  * one constant layout. Same [Brand]: format as tipLine(). */
@@ -261,7 +261,10 @@ export function splash(opts: {
 const W = 52;
 const head = (label: string) => `╭─ ${label} ${"─".repeat(Math.max(2, W - label.length - 4))}`;
 const sep = (label: string) => `├─ ${label} ${"─".repeat(Math.max(2, W - label.length - 4))}`;
-const foot = () => `╰${"─".repeat(W)}`;
+// `W - 1` because the corner glyph itself occupies the first column, the same
+// way `╭─ ` does in head(): head/sep both come out exactly W wide, and a foot
+// of W dashes plus the corner would run one past them.
+const foot = () => `╰${"─".repeat(W - 1)}`;
 
 /** Labeled report row with a hanging indent:
  * `│   what happened  One file took 15 edit…`

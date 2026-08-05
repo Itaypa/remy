@@ -53,7 +53,7 @@ produces two messages:
    `sessions.max_context_pct >= 80`, throttled to once per
    `CONTEXT_ALARM_THROTTLE_MS` (default 3 min, `core/src/tips.ts`
    `dueForContextAlarm`/`markContextAlarmShown`, keyed by session id in
-   `sync_state`). `contextAlarmLine()` in `cli/src/ui.ts`: `[🐭REMY]: context
+   `sync_state`). `contextAlarmLine()` in `cli/src/ui.ts`: `[🐭 REMY]: context
    at 92% — every reply re-reads 184k 🪙`.
 2. **Tip nudge**: fires when a tip is active and due, throttled to once per
    `STOP_NUDGE_THROTTLE_MS` (default 10 min, `dueForStopNudge`/
@@ -61,14 +61,14 @@ produces two messages:
    own column, deliberately not shared with the splash's `last_shown_at`,
    which a `/reload-plugins` or session resume re-fires far more often than
    real turns happen). Renders via `tipLine()` — the exact same function and
-   output as the statusline tag and the splash line: `[🐭REMY]: 🔨 Same file
+   output as the statusline tag and the splash line: `[🐭 REMY]: 🔨 Same file
    edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`. While the session
    is in alarm territory (≥80%), context tips (`context-band`,
    `auto-compact`) never take this slot — one voice about context at a time;
    they still reach the splash and `/remy`.
 
 Both use the bracketed `BRAND` tag (`core/src/catalog.ts` — currently
-"🐭REMY"), not a separate voice. An earlier version voiced the tip nudge with
+"🐭 REMY"), not a separate voice. An earlier version voiced the tip nudge with
 a fictional mascot ("Byte:") specifically to avoid misattributing advice to
 the real experts some tips cite — dropped once it was clear the product
 name in brackets never had that problem to begin with.

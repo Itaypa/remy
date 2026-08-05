@@ -1,6 +1,6 @@
 # REMY — the coaching layer for AI coding agents
 
-> Product and binary name: **`remy`**, written **REMY** in prose and **🐭REMY** in the
+> Product and binary name: **`remy`**, written **REMY** in prose and **🐭 REMY** in the
 > bracketed tag every coaching message carries (`BRAND` in `core/src/catalog.ts` — change
 > it there). Named after the rat who sits on the cook's head and guides his hands: he
 > never cooks for you, and he never touches your code.

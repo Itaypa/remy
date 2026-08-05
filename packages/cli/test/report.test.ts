@@ -115,6 +115,20 @@ describe("renderReport", () => {
     expect(off).toContain("--on");
     expect(off).not.toContain("last analyzed");
   });
+
+  test("every box rule is the same terminal width, whatever the brand tag is", () => {
+    // The header rule is padded to fill W, but the footer was `╰` + W dashes —
+    // one column past it, because the corner glyph occupies a column too. The
+    // widths must be measured with Bun.stringWidth, not `.length`: the header
+    // carries BRAND, whose emoji is a surrogate pair, so a `.length` check
+    // would compare a code-unit count against a rendered one and agree with
+    // both the right answer and the wrong one.
+    const out = renderReport({ session: session(), tips: [tip()], active: tip() });
+    const rules = out.split("\n").filter((l) => /^[╭╰├]/.test(l));
+    expect(rules.length).toBeGreaterThan(2); // head + at least one sep + foot
+    const widths = new Set(rules.map((l) => Bun.stringWidth(l)));
+    expect([...widths]).toEqual([52]);
+  });
 });
 
 describe("renderWeek", () => {
