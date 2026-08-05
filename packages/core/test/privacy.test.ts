@@ -114,19 +114,74 @@ describe("privacy gate", () => {
     }
   });
 
+  /** Every way a process can reach the network that this codebase could
+   * plausibly acquire. Kept as one exported-by-test constant so the scanner
+   * below can be checked against planted samples — a scanner that finds
+   * nothing is indistinguishable from a scanner that is broken. */
+  const EGRESS =
+    /\bfetch\s*\(|new WebSocket|new EventSource|XMLHttpRequest|sendBeacon|Bun\.(connect|listen|serve)\b|node:(https?|net|dgram|tls)\b|(from|require\s*\()\s*["'](https?|net|dgram|tls)["']/;
+
+  /** Every .ts under a directory, recursively — the old scan was one level
+   * deep, so `core/src/net/client.ts` would not have been looked at. */
+  function tsFilesUnder(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...tsFilesUnder(full));
+      else if (entry.name.endsWith(".ts")) out.push(full);
+    }
+    return out;
+  }
+
+  test("the egress scanner actually detects egress", () => {
+    // The test below asserts an empty list. That assertion is worthless unless
+    // the pattern it uses can be shown to catch something, so these are the
+    // shapes it must never start missing.
+    for (const sample of [
+      'const r = await fetch("https://x")',
+      'new WebSocket("wss://x")',
+      'import { request } from "node:http"',
+      'import { connect } from "node:net"',
+      'const dns = require("dgram")',
+      'import tls from "tls"',
+      "Bun.connect({ hostname: 'x', port: 1 })",
+      "Bun.serve({ port: 3000 })",
+      "new EventSource('/x')",
+      "navigator.sendBeacon('/x')",
+    ]) {
+      expect(EGRESS.test(sample), `scanner missed: ${sample}`).toBe(true);
+    }
+    // And it must not fire on the things this codebase legitimately contains.
+    for (const innocent of [
+      'const rows = db.query("SELECT * FROM sessions").all()',
+      "const text = await Bun.stdin.text()",
+      'import { join } from "node:path"',
+      'import { readFileSync } from "node:fs"',
+      "// the adaptive analyzer spawns a local claude -p",
+    ]) {
+      expect(EGRESS.test(innocent), `scanner false-positived on: ${innocent}`).toBe(false);
+    }
+  });
+
   test("the adaptive analyzer is the ONLY outbound path in the codebase", () => {
-    // Everything REMY knows stays in ~/.remy/remy.db. The one thing that ever
+    // Everything REMY knows stays in its local DB. The one thing that ever
     // leaves the process is the adaptive analyzer's prompt (a local `claude -p`
-    // call, off by default-able), and its payload is whitelisted below. If a
-    // second egress path ever appears, this test is where it must be justified.
-    const src = join(import.meta.dir, "..", "src");
+    // call, disableable), and its payload is whitelisted below. If a second
+    // egress path ever appears, this test is where it must be justified.
+    //
+    // Scans the CLI as well as core: the claim in this test's name is about the
+    // codebase, and a fetch() in the hook path would break the promise exactly
+    // as badly as one in core. The local-binary spawn is a shell exec, not a
+    // socket, so it is not matched.
+    const roots = [
+      join(import.meta.dir, "..", "src"),
+      join(import.meta.dir, "..", "..", "cli", "src"),
+    ];
     const offenders: string[] = [];
-    for (const file of readdirSync(src)) {
-      if (!file.endsWith(".ts")) continue;
-      const body = readFileSync(join(src, file), "utf8");
-      // `adapt.ts` builds the prompt but does not send it; the CLI spawns the
-      // local claude binary. Neither may reach the network directly.
-      if (/\bfetch\s*\(|new WebSocket|node:https?\b/.test(body)) offenders.push(file);
+    for (const root of roots) {
+      for (const file of tsFilesUnder(root)) {
+        if (EGRESS.test(readFileSync(file, "utf8"))) offenders.push(file);
+      }
     }
     expect(offenders).toEqual([]);
   });
