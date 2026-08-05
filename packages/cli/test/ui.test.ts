@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { BRAND, type SessionRow, type TipRow } from "@ccpp/core";
-import { bar, contextAlarmLine, fmtCost, fmtTok, rateLimitBadge, spendField, splash, tipLine, weekTotals } from "../src/ui";
+import { BRAND, HINTS, type SessionRow, type TipRow } from "@ccpp/core";
+import { bar, contextAlarmLine, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -273,4 +273,61 @@ describe("bar", () => {
     expect(bar(-50)).toBe("░░░░░░░░░░");
   });
 });
+});
+
+describe("surfaces nothing was testing", () => {
+  test("modelEmoji covers every family it claims to, and falls back for the rest", () => {
+    // Rendered on the statusline roughly once a second and asserted nowhere.
+    expect(modelEmoji("claude-fable-5")).toBe("🐉");
+    expect(modelEmoji("claude-opus-5[1m]")).toBe("🎭");
+    expect(modelEmoji("claude-sonnet-5")).toBe("🎼");
+    expect(modelEmoji("claude-haiku-4-5")).toBe("🍃");
+    // Case and vendor prefixes must not defeat it — Bedrock-style ids are real.
+    expect(modelEmoji("anthropic.claude-3-5-SONNET-v2:0")).toBe("🎼");
+    // Unknown, absent, and null all land on the generic robot rather than "".
+    for (const id of ["gpt-4", "", null, undefined]) {
+      expect(modelEmoji(id), `${String(id)} should fall back`).toBe("🤖");
+    }
+  });
+
+  test("hyperlinks are emitted only where the terminal supports them", () => {
+    // Getting this wrong sprays OSC-8 escape codes across the statusline of
+    // every terminal that can't render them.
+    expect(linksEnabled({ TERM_PROGRAM: "iTerm.app" })).toBe(true);
+    expect(linksEnabled({ TERM: "xterm-kitty" })).toBe(true);
+    expect(linksEnabled({ TERM: "xterm-ghostty" })).toBe(true);
+    expect(linksEnabled({ TERM_PROGRAM: "Apple_Terminal" })).toBe(false);
+    expect(linksEnabled({})).toBe(false);
+    // The override wins in both directions, whatever the terminal says.
+    expect(linksEnabled({ REMY_LINKS: "1", TERM_PROGRAM: "Apple_Terminal" })).toBe(true);
+    expect(linksEnabled({ REMY_LINKS: "0", TERM_PROGRAM: "iTerm.app" })).toBe(false);
+  });
+
+  test("every hint is reachable — the deck must not outgrow the year", () => {
+    // rotatingHint indexes by day-of-year modulo HINTS.length, so a deck longer
+    // than 366 entries would contain hints no user could ever see. Cheap
+    // invariant, and the failure is silent.
+    expect(HINTS.length).toBeGreaterThan(0);
+    expect(HINTS.length).toBeLessThanOrEqual(366);
+    expect(HINTS).toContain(rotatingHint());
+  });
+
+  test("the spinner line speaks the session's own numbers, and survives an unknown tip", () => {
+    // tipLineLong is the wide-surface renderer — the only consumer of `live` —
+    // and had no assertions at all.
+    const line = tipLineLong({
+      id: 1, tip_id: "reread-churn", session_id: "s1", created_at: "2026-08-06T00:00:00.000Z",
+      status: "active", evidence: JSON.stringify({ files: 8, worst: 12 }),
+      est_savings_tokens: 16_000, why: null,
+    } as TipRow);
+    expect(line).toContain(BRAND);
+    expect(line).toContain("12");
+    expect(line).not.toMatch(/\{\w+\}/);
+
+    const unknown = tipLineLong({
+      id: 2, tip_id: "no-such-tip", session_id: "s1", created_at: "2026-08-06T00:00:00.000Z",
+      status: "active", evidence: "{}", est_savings_tokens: 0, why: null,
+    } as TipRow);
+    expect(unknown).toContain("/remy");
+  });
 });
