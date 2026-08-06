@@ -164,6 +164,12 @@ function migrate(db: Database): void {
   addColumnIfMissing(db, "sessions", "effort_max_turns", "effort_max_turns INTEGER");
   addColumnIfMissing(db, "sessions", "effort_high_turns", "effort_high_turns INTEGER");
   addColumnIfMissing(db, "sessions", "effort_max_out", "effort_max_out INTEGER");
+  // Bytes of auto-memory index the host loads every session (see claudemd.ts).
+  // Kept SEPARATE from claude_md_bytes on purpose: `claude-md-prune` renders
+  // that column as "your CLAUDE.md is {kb}KB" and tells you to cut lines, and
+  // these bytes belong to a file Claude wrote and /memory manages. Summing
+  // them would make the tip wrong about the file it names.
+  addColumnIfMissing(db, "sessions", "auto_memory_bytes", "auto_memory_bytes INTEGER");
   // Tool calls denied by the host's auto-mode classifier (the PermissionDenied
   // hook). Defaults to 0 rather than NULL, so rows written before this shipped
   // are indistinguishable from genuinely denial-free ones — any future *rate*
@@ -298,6 +304,8 @@ export interface SessionRow {
   effort_max_turns: number | null;
   effort_high_turns: number | null;
   effort_max_out: number | null;
+  /** Bytes of auto-memory index loaded per session (local-only). */
+  auto_memory_bytes: number | null;
   /** Tool calls denied by the host's auto-mode classifier (local-only). */
   perm_denials: number;
 }
@@ -376,6 +384,14 @@ export function setClaudeMdBytes(db: Database, sessionId: string, bytes: unknown
  * setClaudeMdBytes — the INTEGER affinity would happily store a string, so this
  * is what keeps the column numeric. Either both values are usable or neither is
  * stored: a byte count without its skill count is a number nothing can explain. */
+/** Record the auto-memory measurement. Same coercion contract as its
+ * siblings — INTEGER affinity would store a string happily, so this is what
+ * keeps the column numeric. */
+export function setAutoMemoryBytes(db: Database, sessionId: string, bytes: unknown): void {
+  const n = typeof bytes === "number" && Number.isFinite(bytes) ? Math.max(0, Math.trunc(bytes)) : null;
+  db.query(`UPDATE sessions SET auto_memory_bytes = ? WHERE session_id = ?`).run(n, sessionId);
+}
+
 export function setSkillPack(db: Database, sessionId: string, pack: unknown): void {
   const whole = (v: unknown): number | null =>
     typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;

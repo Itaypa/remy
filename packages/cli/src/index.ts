@@ -12,6 +12,8 @@ import {
   buildAdaptPrompt,
   claudeMdBytes,
   setClaudeMdBytes,
+  autoMemoryBytes,
+  setAutoMemoryBytes,
   skillPackBytes,
   setSkillPack,
   readSubagentStats,
@@ -179,6 +181,10 @@ async function ingest(): Promise<void> {
       // so this can't cost the splash below.
       if (typeof payload.cwd === "string") {
         setClaudeMdBytes(db, sessionId, claudeMdBytes(payload.cwd));
+        // Auto memory is on by default and loads into every session, and none
+        // of it has ever been counted. Separate column, never summed into the
+        // CLAUDE.md figure the prune tip quotes.
+        setAutoMemoryBytes(db, sessionId, autoMemoryBytes(payload.cwd));
         // The other half of the startup pack, and the bigger one: skill
         // frontmatter from every enabled plugin. Measured here because it is
         // not recoverable later — plugins get toggled, and a session that

@@ -80,6 +80,7 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     effort_max_turns: null,
     effort_high_turns: null,
     effort_max_out: null,
+    auto_memory_bytes: null,
     perm_denials: 0,
     ...overrides,
   };

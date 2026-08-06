@@ -208,3 +208,37 @@ a markdown code block.
 - `git status --porcelain=v1 --branch` output shape on very old git versions
   (the `## branch...upstream [ahead N]` header format) — not exhaustively
   tested outside recent git.
+
+
+## `InstructionsLoaded` — the surface we are not using yet
+
+Discovered 2026-08-07 (sweep 6). The host fires a hook reporting exactly which instruction
+files it loaded, which is the ground truth REMY's `claudemd.ts` probe currently
+approximates by walking the filesystem itself.
+
+Payload, read from the 2.1.220 binary rather than the rendered docs:
+
+```
+{ hook_event_name: "InstructionsLoaded", file_path, memory_type, load_reason,
+  globs, trigger_file_path, parent_file_path }
+memory_type ∈ User | Project | Local | Managed
+load_reason ∈ session_start | nested_traversal | path_glob_match | include | compact
+```
+
+**There is no `file_content` field**, contrary to the rendered documentation — do not
+design around one.
+
+Verified live against a fixture: it fires for the root CLAUDE.md, for unscoped
+`.claude/rules/*.md`, and for each hop of an `@path` import chain (with `parent_file_path`
+set), and correctly stays silent for `paths:`-scoped rules, subdirectory CLAUDE.md files,
+and a backticked `` `@README` ``. It does **not** fire for auto memory.
+
+**Why it is not registered.** One `remy` process spawn per instruction file, measured at
+~32 ms each. A monorepo with twenty unscoped rules would add ~640 ms to session start and
+twenty contending WAL writers — the hook-spam pattern this project rejected as a coaching
+target in `docs/trend-watch.md` (sweep 3, H1b), and it would be worse to commit it
+ourselves. `nested_traversal` and `path_glob_match` also make the count unbounded per
+session. Its results arrive after the SessionStart splash has already rendered.
+
+The shape that would work: a matcher limited to `session_start|include`, a hook that only
+appends a line to a file, and one ingest at SessionEnd.

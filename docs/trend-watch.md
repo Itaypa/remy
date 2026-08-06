@@ -402,3 +402,99 @@ settled, not deferred.
 
 **Revisit trigger for K1:** a corpus where ≥3 sessions show a `session_start` inside a
 sub-30-minute gap preceding a ≥100k re-write. Until then it lives in the hints deck.
+
+---
+
+## 2026-08-07 — sweep 6
+
+One finding, and it is a correctness defect in a shipped measurement rather than a new
+detector.
+
+**L1 — `claude_md_bytes` measures the wrong quantity.** The probe stats
+`CLAUDE.md` / `CLAUDE.local.md` / `.claude/CLAUDE.md` up the tree plus
+`~/.claude/CLAUDE.md`. Per [the memory doc](https://code.claude.com/docs/en/memory) the
+host also loads, at launch, five things it never counted:
+
+1. **Auto-memory `MEMORY.md`** — "loaded at the start of every conversation", first 200
+   lines or 25KB. **On by default.**
+2. **`.claude/rules/*.md`** without `paths:` frontmatter — "loaded at launch with the same
+   priority as `.claude/CLAUDE.md`". Scoped rules load on demand and must not count.
+3. **`~/.claude/rules/*.md`** — same.
+4. **`@path` imports** — expanded inline at launch, recursive to four hops, skipping code
+   spans and fenced blocks.
+5. **Managed-policy CLAUDE.md**, and the `claudeMd` key inside managed settings —
+   un-excludable by the user.
+
+And one over-count: block-level HTML comments are stripped before injection.
+
+Measured here: REMY counts 9,659 B, the host loads 10,539 B. Of the five, only auto memory
+has any local population (880 B); rules dirs, managed policy and imports are all zero, and
+HTML comments are zero bytes across all five CLAUDE.md files on disk.
+
+### Shipped: auto memory only, in its own column
+
+Both seats independently reached the same shape, and the reason is S12 inverted. Folding
+these bytes into `claude_md_bytes` would make `claude-md-prune` say "your CLAUDE.md is
+{kb}KB — cut any line whose absence causes no mistake" about a file **Claude wrote, that
+the user cannot prune line by line, and that has its own lever** (`/memory`). Naming a
+cause you get wrong is worse than silence, so: separate column, no threshold move, no copy
+change, collect-only.
+
+Three facts the finding didn't have, all load-bearing and all found by experiment:
+
+- `autoMemoryDirectory` (any settings scope) relocates the directory, so a hard-coded path
+  is wrong for anyone who set it.
+- The project key is derived from the **git repository**, so every worktree shares one
+  memory directory. This repo runs its own tooling in worktrees, so the probe returns 0
+  when `.git` is a file rather than guessing.
+- The 200-line / 25KB caps are measured **after** frontmatter and comments are stripped,
+  so the probe strips before measuring.
+
+**A live bug fixed on the way:** `claudemd.ts` de-duplicated its walk by raw path string.
+The host's own docs recommend `ln -s AGENTS.md CLAUDE.md`, and a symlinked
+`.claude/CLAUDE.md -> ../CLAUDE.md` reached the walk under two names and was counted
+twice. It now resolves before de-duplicating.
+
+### Rejected
+
+- **Import following.** Zero population locally, and correctness needs a real Markdown
+  tokenizer plus four-hop recursion with cycle detection — and it would still get the
+  motivating case wrong, because the docs' recommended `@~/.claude/…` worktree pattern is
+  an *external* import behind an approval dialog whose outcome REMY cannot see. If imports
+  ever matter, take them from `InstructionsLoaded`'s `load_reason:"include"` instead.
+- **HTML-comment stripping in CLAUDE.md.** The only proposal that makes the number go
+  *down*, chasing a measured zero, and it would require reading every CLAUDE.md in full.
+- **Managed policy as a prune input.** The user cannot edit it; prune advice about an
+  org-deployed file coaches the developer for an administrator's choice — H1b's failure.
+
+### Ground truth found: the `InstructionsLoaded` hook
+
+The host ships a hook that reports exactly which instruction files loaded, and **nothing
+in this repo mentions it**. Payload (read from the 2.1.220 binary, not the docs):
+`{hook_event_name, file_path, memory_type, load_reason, globs, trigger_file_path,
+parent_file_path}` with `memory_type ∈ User|Project|Local|Managed` and
+`load_reason ∈ session_start|nested_traversal|path_glob_match|include|compact`. There is
+**no** `file_content` field, contrary to the rendered docs.
+
+Run live against a fixture it fired exactly four times — root CLAUDE.md, an unscoped rule,
+and both hops of an import chain with `parent_file_path` set — and correctly stayed silent
+for a `paths:`-scoped rule, a subdirectory CLAUDE.md, and a backticked `` `@README` ``. It
+resolves omissions 2–5 and every false-positive class at once, with no reimplementation of
+the host's algorithm. It does **not** fire for auto memory.
+
+Not adopted tonight: it costs one process spawn per instruction file (~32 ms measured), so
+a monorepo with 20 unscoped rules would add ~640 ms to session start — the hook-spam this
+loop rejected as H1b in sweep 3. Its results also arrive after the splash has rendered.
+**Revisit trigger:** a corpus where the deterministic probe and the hook disagree by >10%
+on three machines, or a design that appends to a file and ingests once at SessionEnd.
+
+### Deferred with triggers
+
+- **`.claude/rules/` as a suppressor for `claude-md-missing`** — the sharpest half of this
+  finding, and the one real *wrong tip*: a user with curated `.claude/rules/` and no
+  CLAUDE.md is currently told "this project has no CLAUDE.md, run /init". Used
+  asymmetrically (suppress only, never fire) it needs no content read and over-counting
+  scoped rules errs toward silence. Trigger: one machine in the corpus with a non-empty
+  rules directory. Today: zero.
+- **Managed policy** as a `context-tax` attribution component. Trigger: any non-consumer
+  install.

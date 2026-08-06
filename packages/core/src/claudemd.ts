@@ -1,6 +1,7 @@
-import { statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { envVar } from "./env";
 
 // How much project memory the host loads before turn one — the signal behind
 // the `claude-md-missing` and `claude-md-prune` tips.
@@ -52,8 +53,19 @@ export function claudeMdBytes(cwd: string): number {
     let total = 0;
 
     const add = (path: string): void => {
-      if (seen.has(path)) return;
-      seen.add(path);
+      // De-duplicate by resolved path, not by the string we happened to build.
+      // The host's own docs recommend `ln -s AGENTS.md CLAUDE.md`, and a
+      // symlinked `.claude/CLAUDE.md -> ../CLAUDE.md` reaches this walk under
+      // two different names — counted twice before this.
+      let key = path;
+      try {
+        key = realpathSync.native(path);
+      } catch {
+        // Missing file (the common case) or a broken link: the raw path is a
+        // fine key, and sizeOf() will score it 0 anyway.
+      }
+      if (seen.has(key)) return;
+      seen.add(key);
       total += sizeOf(path);
     };
 
@@ -70,6 +82,76 @@ export function claudeMdBytes(cwd: string): number {
     }
 
     return Number.isFinite(total) ? total : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------- auto memory
+
+/** The host loads the first 200 lines or 25KB of MEMORY.md, whichever comes
+ * first. Both caps are measured AFTER frontmatter and block comments are
+ * stripped, so this strips before measuring too. */
+const AUTO_MEMORY_MAX_BYTES = 25_000;
+const AUTO_MEMORY_MAX_LINES = 200;
+
+/** How the host names a project's directory under ~/.claude/projects:
+ * every non-alphanumeric character becomes a dash. Verified against the live
+ * directory on this machine rather than inferred. */
+function projectSlug(root: string): string {
+  return root.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+/** Repository root for `cwd`, or null when we shouldn't guess.
+ *
+ * The host keys auto memory by the GIT REPOSITORY, so every worktree of a repo
+ * shares one memory directory — deriving it from cwd would look in the wrong
+ * place for exactly the worktrees this repo's own tooling runs in. A `.git`
+ * that is a FILE means a linked worktree, and resolving that properly means
+ * parsing gitdir pointers; unmeasured beats mismeasured, so that returns null. */
+function repoRoot(cwd: string): string | null {
+  let dir = cwd;
+  for (let i = 0; i < MAX_WALK_DEPTH; i++) {
+    const st = statSync(join(dir, ".git"), { throwIfNoEntry: false });
+    if (st?.isDirectory()) return dir;
+    if (st?.isFile()) return null; // linked worktree — don't guess
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Bytes of auto-memory index the host loads for this session.
+ *
+ * Auto memory is ON BY DEFAULT and its MEMORY.md is "loaded at the start of
+ * every conversation", so for most users this is real context that
+ * `claudeMdBytes` has never counted. It is returned SEPARATELY and never added
+ * to that number: `claude-md-prune` renders its byte count as "your CLAUDE.md
+ * is {kb}KB" and tells you to cut lines, and these bytes belong to a file
+ * Claude wrote and `/memory` manages — summing them would make that tip wrong
+ * about the file it names.
+ *
+ * Reads the file, unlike the rest of this module, because the host's caps are
+ * measured on the stripped content. The output surface is still one integer;
+ * nothing derived from the content escapes, and nothing here throws. */
+export function autoMemoryBytes(cwd: string, home = homedir()): number {
+  if (typeof cwd !== "string" || cwd.length === 0) return 0;
+  try {
+    if (envVar("DISABLE_AUTO_MEMORY", process.env as Record<string, string>) === "1") return 0;
+    const root = repoRoot(cwd);
+    if (root === null) return 0;
+    const path = join(home, ".claude", "projects", projectSlug(root), "memory", "MEMORY.md");
+    const st = statSync(path, { throwIfNoEntry: false });
+    if (!st?.isFile()) return 0;
+    // Bounded read: the host never loads more than the cap, and a runaway file
+    // must not turn a SessionStart hook into a large read.
+    const raw = readFileSync(path, "utf8").slice(0, AUTO_MEMORY_MAX_BYTES * 4);
+    const stripped = raw
+      .replace(/^---\n[\s\S]*?\n---\n/, "") // YAML frontmatter
+      .replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*\n?/gm, ""); // block-level HTML comments
+    const capped = stripped.split("\n").slice(0, AUTO_MEMORY_MAX_LINES).join("\n");
+    return Math.min(Buffer.byteLength(capped, "utf8"), AUTO_MEMORY_MAX_BYTES);
   } catch {
     return 0;
   }
