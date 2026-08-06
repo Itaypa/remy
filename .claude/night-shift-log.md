@@ -189,3 +189,24 @@ fixture change you'll make in seconds and I should not make inside your working 
 Also worth knowing before you apply it: `max_context_pct` is written with
 `MAX(max_context_pct, ?)` in three places, so a corrected lower percentage can never land —
 the fix is incomplete until that MAX comes off the analysis-side write.
+
+
+## 2026-08-07 01:30 — audit of stored data against a fresh recomputation
+
+Ran every stored session field through the current code and diffed. Three groups of
+disagreement, and **none of them is a live defect**:
+
+- **`model`, 10 of 22.** Stale rows written by the pre-S13 last-seen logic (one still says
+  `<synthetic>`), plus sessions whose transcript carries no model at all, where the
+  statusline's value is correctly kept by COALESCE. Both resolve on the next analysis.
+- **tokens, 6 of 22.** Two shapes: small drift on sessions analysed mid-flight, which is
+  expected; and three sessions storing zero against real usage — `34ce67cd` alone hides
+  739,819 output tokens and 113M of cache, about 26% of the whole corpus's stored output.
+  All three started 2026-07-26/27 with `tool_calls = 0` and no `ended_at`: the
+  pre-instrumentation era, before the hooks recorded anything. Every session from
+  2026-08-04 has full events. **Historical, so no backfill was built** — checking the dates
+  is what stopped a fix being proposed for a problem that had already stopped happening.
+- **`used_plan_mode`, 1 of 22.** Same pre-instrumentation session.
+
+The audit's real value is what it did *not* find: after last night's and tonight's fixes,
+nothing else systematic disagrees between what REMY stores and what the transcripts say.

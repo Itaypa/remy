@@ -710,6 +710,22 @@ sessions we cannot measure.
    432 turns / 167.5M at 200k — the stored estimate is 200k-shaped and the turn count
    matches neither. Whatever wrote it disagreed with both.
 
+### Reproduced live, 2026-08-07 — this is not historical cleanup
+
+Driving the real binary end to end against transcript `b87b7ddb` in a fresh data
+directory, where the statusline has never run and so `context_window` is NULL:
+
+```
+🧠 context  ▓▓▓▓▓▓▓▓▓▓ peaked at 100% · compacts: 0 auto / 0 manual
+🎯 Rode the red zone — ~186M 🪙 recoverable
+```
+
+The very same transcript, analysed against its real 1,000,000 window on the row where the
+host did report it, peaks at **96%** and produces an order of magnitude less. So any
+session whose statusline never ran — a `-p` run, a crashed start, a fresh install, an
+agent-team teammate — is scored at 200k and shown a full bar with a nine-figure estimate.
+The defect is live and reproducible on demand, not a property of old rows.
+
 ### Also reads the limit, and would move with any fix
 
 The PreCompact estimate (`contextLimit() * 0.3`, ignoring the stored window entirely), the
