@@ -220,7 +220,9 @@ describe("tip template variables", () => {
         est_savings_tokens: 81_000,
       }),
     });
-    expect(out).toContain("~9.9k tokens");
-    expect(out).not.toContain(TIPS["context-tax"]!.fallbacks!.skill_k!);
+    // flat() because the report wraps long values across continuation lines —
+    // the measurement is there, just not on one line.
+    expect(flat(out)).toContain("~9.9k tokens");
+    expect(flat(out)).not.toContain(TIPS["context-tax"]!.fallbacks!.skill_k!);
   });
 });

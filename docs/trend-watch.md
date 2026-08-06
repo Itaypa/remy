@@ -498,3 +498,107 @@ on three machines, or a design that appends to a file and ingests once at Sessio
   rules directory. Today: zero.
 - **Managed policy** as a `context-tax` attribution component. Trigger: any non-consumer
   install.
+
+---
+
+## 2026-08-07 — sweep 7
+
+Ran the sweep as an audit rather than a hunt: **which shipped tips does the host now do
+better?** The skill asks for this explicitly ("a new `/command` can make one of our
+shipped tips obsolete — flag both"), and it turned out to be the highest-yield question
+asked in seven sweeps.
+
+Source: [the commands doc](https://code.claude.com/docs/en/commands), fetched tonight.
+`/doctor` (alias `/checkup`, a bundled skill, so live on every install) now finds "unused
+skills, MCP servers, and plugins **versus their context cost**", flags slow hooks,
+**deduplicates** local CLAUDE.md against checked-in ones, **trims** checked-in CLAUDE.md by
+"cutting content Claude could derive from the codebase" while keeping "pitfalls,
+rationale, and conventions that differ from tool defaults", **migrates** always-loaded
+guidance into skills and nested files, offers to pre-approve frequently denied read-only
+commands — and reports first, asking before it changes anything. `/fewer-permission-prompts`
+scans transcripts and writes a permission allowlist. `/context` now shows "optimization
+suggestions for context-heavy tools and memory bloat".
+
+### The finding that mattered was a contradiction, not an overlap
+
+`reread-churn` told the user: *"Facts Claude keeps re-deriving belong in CLAUDE.md."*
+`/doctor`'s trim cuts *"content Claude could **derive** from the codebase."* Same word,
+opposite instruction — **a user who followed REMY and then ran `/doctor` would watch it
+delete what we told them to add.** The hints deck carried the same defect. Both now name
+what the trim explicitly *keeps*: the convention Claude keeps missing, the pitfall, the
+constraint — and point whole-codebase facts at a nested CLAUDE.md that loads on demand.
+
+Checked the neighbours rather than assuming: `tools-over-bash` and `mistake-to-rule` also
+say "pin it in CLAUDE.md", but both name conventions that differ from tool defaults, which
+is on the trim's keep list. Unchanged.
+
+### Notice, then hand off — and the rule that came out of it
+
+`claude-md-prune` and `context-tax` now lead their fix with `/doctor` instead of spelling
+out a manual audit. The principle both seats converged on, worth keeping:
+
+> **Never let a host command replace a number we measured; only ever let it replace an
+> instruction we could not verify.**
+
+So `context-tax` keeps `{skill_k}` — S12's measurement — and hands off only the imperative.
+`claude-md-prune` keeps its by-hand sentence as a fallback, because `/doctor`'s trim is
+scoped to a *checked-in* CLAUDE.md while our byte count also sums `~/.claude/CLAUDE.md`,
+which it will not touch. A handoff also makes the tip falsifiable for the first time: we
+re-probe `claude_md_bytes` at every SessionStart, so we can see whether it worked.
+
+### S9 dropped: the host shipped both halves
+
+`allowlist-the-routine` sat in the backlog as "needs collection before a threshold". It is
+dropped, on four independent grounds:
+
+1. **Our detection is fenced off by our own design.** It needs `PermissionRequest`, which
+   CLAUDE.md deliberately refuses to register because stdout on that event is an allow/deny
+   decision. An *approved* prompt leaves no trace anywhere else — S11's denials are a
+   different population, as the backlog already says.
+2. `/fewer-permission-prompts` scans transcripts, so it sees the prompts we structurally
+   cannot.
+3. Interruptions carry no 🪙, so the finding could never win `promoteNext` — the mechanism
+   that killed S5 and M16.
+4. `/doctor` additionally offers to pre-approve frequently denied read-only commands.
+
+S11's collection stays: a denied call is a billed round trip and has a real token number.
+
+### Rejected
+
+- **Version-gated copy.** `/doctor`'s trim needs v2.1.206+, so gating looked tempting —
+  but `host_version` is a **dead column**: whitelisted, plumbed through `insertEvent`, and
+  written by nobody (null across all 3,918 local events), exactly like the `repo_hash` that
+  was removed for the same reason. Hook payloads carry no version; only the statusline
+  does, and that is the process already losing DB races. Copy is instead worded as an offer
+  ("asks before changing anything"), which is the host's own guarantee and degrades to
+  true-but-incomplete on older versions rather than false.
+- **REMY invoking host commands itself.** Rejected on three grounds at once: the mascot's
+  founding constraint (he never touches your code, and both commands *modify* files), the
+  zero-token law (`/doctor` is a model-driven session — running it from a coaching path
+  would put a model call in the one place the product forbids it), and the settings-clobber
+  rule. REMY names the command and hands over the knife.
+- **Deleting `claude-md-prune` or `context-tax`** because the host "covers them now". The
+  host covers the *fix*. The detection, the timing and the number are still ours.
+
+### Strategic note, and a risk to watch by name
+
+Across seven sweeps the pattern is consistent: Anthropic ships **pull** surfaces — `/usage`
+behaviour flags, `/context` suggestions, `/doctor`, `/fewer-permission-prompts` — all of
+which require the user to already suspect a problem and go looking. It has not shipped the
+unprompted, quantified, throttled notice, and there is a plausible reason it may not: a
+first-party tool that nags is a trust problem, while a third-party coach you installed *to
+be nagged* is the entire point. Every command the host ships makes REMY's fix half cheaper
+and more convertible while leaving the notice half unclaimed.
+
+Two things to stop doing, recorded as backlog ground rules:
+
+- **Stop writing manual remediation where a host command exists.** That copy goes stale —
+  sweep 5's `--resume` falsehood is what the failure looks like.
+- **Stop admitting backlog rows where the host detects and fixes in one command and we
+  bring no independent number.** That is S9's shape; the triage question is now part of the
+  row template.
+
+**The tail risk, logged so a later sweep looks for it rather than discovering it the way
+`isSidechain` was discovered:** the day the host goes *push* — `/doctor` auto-suggesting at
+session start, or `/usage` flags on the statusline — REMY's moat narrows to quantification,
+cross-session memory, and noise discipline. Watch for it by name.

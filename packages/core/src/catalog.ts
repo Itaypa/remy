@@ -115,7 +115,13 @@ export const TIPS: Record<string, TipDef> = {
     short: "Same file read {worst}× → pin the facts in CLAUDE.md",
     live: "{files} files got read again and again, one of them {worst}× — pin those facts in CLAUDE.md",
     what: "{files} file(s) were read again and again (worst one: {worst}×).",
-    fix: "Facts Claude keeps re-deriving belong in CLAUDE.md — written once, cached forever.",
+    // Deliberately NOT "facts Claude keeps re-deriving belong in CLAUDE.md",
+    // which is what this said until the host shipped `/doctor`: its trim cuts
+    // "content Claude could derive from the codebase" — the same word, the
+    // opposite instruction. A user who followed us and then ran /doctor would
+    // watch it delete what we told them to add. This names what the trim
+    // explicitly KEEPS instead: pitfalls, rationale, conventions.
+    fix: "Pin what Claude gets WRONG, not what it can re-derive: the convention it keeps missing, the pitfall, the constraint. Facts about one corner of the codebase belong in a nested CLAUDE.md next to it, where they load on demand.",
   },
   "edit-thrash": {
     id: "edit-thrash",
@@ -164,7 +170,14 @@ export const TIPS: Record<string, TipDef> = {
     // slices this tip's catalog line at 220 chars (adapt.ts) — it already cuts
     // mid-way through `fix`, so anything added to `what` would push more of
     // the fix out of the model's view.
-    fix: "Disconnect MCP servers you rarely use and prune CLAUDE.md — /context shows what's eating the space. Skill descriptions are {skill_k} of it: /plugin turns off a pack you never invoke.",
+    // /doctor now audits unused skills, MCP servers and plugins against their
+    // context cost, and trims CLAUDE.md — so it replaces the manual audit this
+    // used to spell out. What it does NOT replace is {skill_k}: the host's
+    // check carries no session number and no history. Never let a host command
+    // stand in for a number we measured; only for an instruction we could not
+    // verify. `claude-md-prune` still yields to this tip (rules.ts) because
+    // this sentence still gets CLAUDE.md dealt with — now via /doctor.
+    fix: "Run /doctor: it finds unused skills, MCP servers and plugins against their context cost, trims CLAUDE.md, and asks before changing anything. Skill descriptions alone are {skill_k} of your pack — /context shows the rest.",
     // "skill descriptions", not "plugin skills": the measurement sums plugin,
     // personal (~/.claude) and project skills, so naming plugins as the cause
     // would assert something the probe never established.
@@ -296,7 +309,12 @@ export const TIPS: Record<string, TipDef> = {
     short: "CLAUDE.md is {kb}KB → cut what can't cause a mistake",
     live: "your CLAUDE.md is {kb}KB and every session pays for all of it — cut any line whose absence causes no mistake",
     what: "CLAUDE.md is {kb}KB and loads on every single session — at that size it competes with your actual task for attention.",
-    fix: "For every line ask: would deleting this cause a mistake? If not, cut it.",
+    // /doctor leads because it knows what Claude can derive from THIS codebase
+    // and we do not, and because adapt.ts slices this line at 220 chars — only
+    // the first clause reaches the model. The by-hand sentence stays for the
+    // case /doctor does not cover: its trim is scoped to a checked-in
+    // CLAUDE.md, while our byte count also sums ~/.claude/CLAUDE.md.
+    fix: "Run /doctor: it trims a checked-in CLAUDE.md by cutting what Claude could derive from the codebase, keeps the pitfalls and conventions, and asks before changing anything. For a user-level ~/.claude/CLAUDE.md it won't touch, ask each line: would deleting this cause a mistake?",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
@@ -404,10 +422,11 @@ export const TIPS: Record<string, TipDef> = {
  * attribution in the string — the receipts are part of the fun. */
 export const HINTS: string[] = [
   "💡 Plan mode (Shift+Tab ×2) before big tasks — fewer wrong turns, fewer tokens.",
-  "🧠 CLAUDE.md remembers so Claude doesn't re-read — pin project facts there.",
+  "🧠 Pin what Claude gets wrong, not what it can re-derive — /doctor trims the rest.",
   "🧹 /compact at a natural breakpoint beats auto-compact mid-flight.",
   "🔀 Subagents keep your main context clean during big searches.",
   "⎋ Esc interrupts — steer early instead of paying for the wrong path.",
+  "🔓 Approving the same command all day? /fewer-permission-prompts writes the allowlist.",
   "🗂 --resume keeps your context, not your cache — a big session re-reads at full price.",
   "🔖 Checkpoints are a session buffer, not a backup — commit before a risky agent run.",
   '💬 "Once there is a good plan, it will one-shot the implementation." — Boris Cherny',

@@ -125,14 +125,19 @@ describe("tip catalog", () => {
     expect(measured).not.toContain(def.fallbacks!.skill_k!);
   });
 
-  test("context-tax keeps both of the imperatives its suppression rests on", () => {
+  test("context-tax still gets CLAUDE.md and the tool surface dealt with", () => {
     // claude-md-prune is dropped whenever context-tax fires (rules.ts), and the
-    // stated reason is that this fix already tells you to prune CLAUDE.md.
-    // Losing either imperative would leave a user with a bloated CLAUDE.md and
-    // a heavy pack told the numbers and never told to cut anything.
+    // reason is that this fix already gets CLAUDE.md handled. It used to say
+    // "prune CLAUDE.md" in those words; it now hands off to /doctor, which
+    // trims it. The yield still holds, so this asserts the PROPERTY rather than
+    // the wording — losing either half would leave a user with a bloated
+    // CLAUDE.md and a heavy pack told the numbers and never told to act.
     const fix = TIPS["context-tax"]!.fix;
-    expect(fix).toContain("prune CLAUDE.md");
-    expect(fix).toContain("MCP servers");
+    expect(fix, "must still direct the user at CLAUDE.md").toMatch(/CLAUDE\.md/);
+    expect(fix, "must still direct the user at the tool/skill surface").toMatch(/MCP servers|skills/);
+    // And the measured number survives the handoff: a host command may replace
+    // an instruction we could not verify, never a figure we measured.
+    expect(fix).toContain("{skill_k}");
   });
 
   test("short is Problem → Solution — no brand tag, no value clause, no {est}", () => {
