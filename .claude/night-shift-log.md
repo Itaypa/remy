@@ -166,3 +166,26 @@ its main-chain transcript. Hooks count subagent failures; the transcript does no
 population mismatch, now visible in the failure counter as well as the token counts.
 
 **Unpark condition for S6:** ≥10 sessions recorded after 2026-08-04. Today there is one.
+
+
+## 2026-08-07 01:20 — a real fix, not shipped, because it collides with your uncommitted tests
+
+Testing the migration path on a copy of the live DB turned up a genuine false positive:
+three sessions on 1M-context models are scored against the assumed 200k window, and one is
+stored as having ridden a 100% full context while it sat near a fifth of its real one. Full
+evidence in `docs/trend-watch.md`.
+
+The fix is small — `detectRedZoneRiding` stays silent when the window was never reported,
+rather than borrowing the default. **It is not committed.** It makes three tests fail in
+`packages/cli/test/e2e/surfaces.e2e.test.ts`, which is yours and uncommitted, and the
+night shift neither stages your files nor commits a red suite. The change was reverted and
+the suite is green.
+
+**What a human needs to decide:** those e2e tests build sessions with no `context_window`
+and then assert on tips that depend on the window. Once the limit is only trusted when the
+host reported it, those fixtures need to say which window they mean. That is a one-line
+fixture change you'll make in seconds and I should not make inside your working file.
+
+Also worth knowing before you apply it: `max_context_pct` is written with
+`MAX(max_context_pct, ?)` in three places, so a corrected lower percentage can never land —
+the fix is incomplete until that MAX comes off the analysis-side write.

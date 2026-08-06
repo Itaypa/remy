@@ -645,3 +645,74 @@ link. **The guarded field was the fallback; the field in use was unguarded.** No
 checked, along with the attribution being non-empty (it renders as `— {author ?? source}`,
 so an empty one prints a dangling dash) and a quote never being present-but-empty, since
 the report still draws the quotation marks around it.
+
+---
+
+## 2026-08-07 — the context window is not derivable, and three tips are scored against a guess
+
+Found while testing the migration path on a copy of the real 67-session database, not by
+searching. **Not shipped** — the fix collides with the developer's uncommitted e2e tests
+(see `.claude/night-shift-log.md`). Written up in full so it can be applied deliberately.
+
+### The defect
+
+`analyzeTranscript` picks the limit as `sessions.context_window ?? contextLimit()`, and
+that column is populated only by the statusline. It is known on **11 of 67** local
+sessions. Every other session is scored against the assumed 200k default — and the
+red-zone rule, the context percentage, the alarm and the auto-compact estimate are all
+fractions of that number.
+
+Measured: **3 of the 6 sessions whose model id contains `[1m]` have no recorded window.**
+One of them, `34ce67cd`, is stored with `max_context_pct = 100` — REMY believes it rode a
+completely full window while it sat near a fifth of its real one.
+
+### Why the obvious fix is wrong, and why the better-looking one is too
+
+The first idea was to read the window off the model id, since `claude-opus-5[1m]` says it
+outright. The host's own reports kill that:
+
+| model | host-reported window |
+|---|---|
+| `claude-fable-5` | **1,000,000** — no suffix |
+| `claude-sonnet-5` | **1,000,000** — no suffix |
+| `claude-opus-5` | **200,000** on one session, **1,000,000** on four |
+| `claude-opus-5[1m]`, `claude-opus-4-8[1m]` | 1,000,000 |
+
+The suffix is display text, not a capability flag, and it misses more sessions than it
+fixes — four un-suffixed 1M sessions against two suffixed ones. The adversarial review
+then proposed a model→window table instead, and its own data refutes that as well:
+`claude-opus-5` appears as **both** 200k and 1M in this corpus. **The window is an
+entitlement the host reports, not a property of the model.** Any table is wrong for a real
+session sitting in this database right now.
+
+### What to do instead
+
+Don't infer it. When the window was never reported there is no honest denominator, so the
+rules that need one should stay quiet rather than borrow the default — the same discipline
+`claude_md_bytes` already uses for NULL-versus-zero. Concretely: `detectRedZoneRiding`
+returns null when the limit is assumed rather than measured, and the snapshot carries a
+`contextLimitKnown` flag so the rule can tell the difference. Failure direction matters
+here: a wrong-low limit fires loudly and wrongly, while staying silent only costs a tip on
+sessions we cannot measure.
+
+### Three further defects the review turned up, none fixed
+
+1. **`max_context_pct = MAX(max_context_pct, ?)`** in three places. A *corrected, lower*
+   percentage can never land, so `34ce67cd`'s stored 100 is permanent even after the limit
+   is fixed. The analysis-side write sees every turn and is already the high-water mark, so
+   the MAX there is redundant as well as harmful.
+2. **The statusline's fallback path** calls `tailContext` with no limit and writes
+   `max_context_pct` roughly once a second at 200k. Fixing only the analysis path leaves
+   the wrong number being rewritten continuously.
+3. **A live tip row is internally inconsistent.** `context-band` on `b87b7ddb` stores
+   `est = 219,310,771` with `evidence = {"turns": 17}`, on a session whose row *does*
+   record a 1M window. Recomputing that transcript gives 63 red turns / 16.9M at 1M, and
+   432 turns / 167.5M at 200k — the stored estimate is 200k-shaped and the turn count
+   matches neither. Whatever wrote it disagreed with both.
+
+### Also reads the limit, and would move with any fix
+
+The PreCompact estimate (`contextLimit() * 0.3`, ignoring the stored window entirely), the
+Stop-hook alarm's pct→token conversion, `auto-compact`'s per-compact estimate — which
+matters most, since `detectRedZoneRiding` yields to it — `context-tax`'s percentage, the
+report's context bar, and `max_context_pct` inside the zod-whitelisted adaptive payload.
