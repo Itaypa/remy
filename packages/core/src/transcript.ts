@@ -32,6 +32,9 @@ export interface TranscriptStats {
   cacheExpiryTokens: number;
   /** Longest idle gap among the expiries, in minutes (0 when none). */
   cacheExpiryWorstGapMinutes: number;
+  /** Highest context any main-chain turn reached, as a percentage of the
+   * window — the real peak, not the size at the last turn. */
+  maxContextPct: number;
   /** Main-chain turns that ran with the context ≥80% full ("red zone"). */
   redZoneTurns: number;
   /** Tokens processed above the healthy 60% band across those turns — what
@@ -415,8 +418,15 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   // this measures the habit after the fact.
   let redZoneTurns = 0;
   let redZoneExcessTokens = 0;
+  // The true high-water mark. `contextPct` below is the size at the LAST turn —
+  // contextNow is overwritten every turn and reset after a compact — so it says
+  // nothing about how full the window ever got. Until now the peak came only
+  // from whatever the statusline happened to observe while it was running, so a
+  // session it never watched recorded its ending size and called it the peak.
+  let maxContextTokens = 0;
   for (const t of mainTurns) {
     const ctx = contextOf(t.usage);
+    if (ctx > maxContextTokens) maxContextTokens = ctx;
     if (ctx >= limit * RED_ZONE_PCT) {
       redZoneTurns += 1;
       redZoneExcessTokens += Math.round(ctx - limit * RED_ZONE_BASELINE_PCT);
@@ -430,6 +440,7 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     totals,
     contextTokens,
     contextPct: Math.min(100, Math.round((contextTokens / limit) * 100)),
+    maxContextPct: Math.min(100, Math.round((maxContextTokens / limit) * 100)),
     firstContextTokens: firstContext ?? 0,
     usedPlanMode,
     toolCalls,

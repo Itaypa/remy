@@ -354,7 +354,7 @@ async function analyzeTranscript(
        tokens_in = ?, tokens_out = ?, cache_read = ?, cache_write = ?,
        model = COALESCE(?, model),
        used_plan_mode = MAX(used_plan_mode, ?),
-       max_context_pct = MAX(max_context_pct, ?)
+       max_context_pct = ?
      WHERE session_id = ?`,
   ).run(
     stats.totals.in,
@@ -363,7 +363,11 @@ async function analyzeTranscript(
     stats.totals.cache_write,
     stats.model,
     stats.usedPlanMode ? 1 : 0,
-    stats.contextPct,
+    // The transcript's true peak, not its final size. Still merged with MAX()
+    // because the statusline is a second, independent observer of the same
+    // quantity — both are peaks now, so the merge is a merge rather than a
+    // ratchet hiding a wrong number.
+    stats.maxContextPct,
     sessionId,
   );
   const row = getSession(db, sessionId);

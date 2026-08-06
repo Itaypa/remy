@@ -800,7 +800,18 @@ describe("reasoning-effort mix", () => {
   });
 
   test("the effort VALUE never leaves the parser — only counts do", () => {
+    // Asserted on the VALUES, not on the serialized blob: the first version of
+    // this scanned the JSON for the substring "max", which was a proxy that a
+    // legitimately-named field (maxContextPct) later tripped. What must hold is
+    // that no effort string is carried out, and that the effort fields are
+    // numbers.
     const stats = parseTranscript(withEffort("m1", "max", 10), 200_000);
-    expect(JSON.stringify(stats)).not.toContain("max");
+    const strings = Object.values(stats).filter((v) => typeof v === "string");
+    for (const v of ["max", "high", "medium", "low"]) {
+      expect(strings, `the effort value ${v} must not leave the parser`).not.toContain(v);
+    }
+    for (const k of ["effortTurns", "effortMaxTurns", "effortHighTurns", "effortMaxOutTokens"] as const) {
+      expect(typeof stats[k], `${k} must be a number`).toBe("number");
+    }
   });
 });
