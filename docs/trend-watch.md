@@ -629,3 +629,19 @@ published articles rather than living documentation and drift far less, so the n
 `code.claude.com` citations are the ones worth re-reading. There is no way to test this
 from the suite — the privacy invariant forbids the network in `core` — so it has to be a
 sweep habit rather than a guard.
+
+### Link audit — clean, and one caveat worth writing down
+
+Checked all 15 URLs the catalog ships (10 `docs` click-throughs, 9 `cite` links, some
+shared). **All resolve.** The only non-200 was Steve Yegge's Medium article at 403, which
+is Medium refusing automated requests — verified by fetching the page's content
+successfully, including the sentence the tip quotes. Reporting that as a dead link would
+have been a false finding, which is why it was checked twice.
+
+What the audit did surface is a gap in the suite rather than in the links: `/remy` renders
+`read more ↗ ${cite?.url ?? docs}`, so for the 19 tips carrying a citation the URL a user
+actually clicks is `cite.url` — and only `docs` was checked for being a well-formed https
+link. **The guarded field was the fallback; the field in use was unguarded.** Now both are
+checked, along with the attribution being non-empty (it renders as `— {author ?? source}`,
+so an empty one prints a dangling dash) and a quote never being present-but-empty, since
+the report still draws the quotation marks around it.

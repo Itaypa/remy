@@ -59,6 +59,23 @@ describe("tip catalog", () => {
     }
   });
 
+  test("the citation is well-formed too — it is the link the report actually uses", () => {
+    // /remy renders `read more ↗ ${def.cite?.url ?? def.docs}`, so for the tips
+    // that carry a citation the URL a user clicks is cite.url, not docs. Only
+    // docs was checked above: the guarded field was the fallback, and the field
+    // in use was unguarded.
+    for (const [key, def] of Object.entries(TIPS)) {
+      if (!def.cite) continue;
+      expect(def.cite.url, `${key} cite url is not a clean https link`).toMatch(/^https:\/\/[^\s"\\]+$/);
+      // The attribution renders as `— ${author ?? source}`, so an empty source
+      // with no author prints a dangling dash.
+      expect((def.cite.author ?? def.cite.source).length, `${key} cite has nothing to attribute to`).toBeGreaterThan(0);
+      // A quote is a claim about what a source says; an empty one is worse than
+      // none, because the report still renders the quotation marks.
+      if ("quote" in def.cite) expect(def.cite.quote!.length, `${key} has an empty quote`).toBeGreaterThan(0);
+    }
+  });
+
   test("every tip has sample evidence and every short renders ≤55 chars with no leftover placeholders", () => {
     for (const [key, def] of Object.entries(TIPS)) {
       const evidence = SAMPLE_EVIDENCE[key];
