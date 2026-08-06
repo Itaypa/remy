@@ -298,7 +298,7 @@ export const TIPS: Record<string, TipDef> = {
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
-      quote: "CLAUDE.md is automatically pulled into context when starting a conversation.",
+      quote: "CLAUDE.md is a special file that Claude reads at the start of every conversation.",
     },
   },
   "claude-md-prune": {
@@ -396,7 +396,7 @@ export const TIPS: Record<string, TipDef> = {
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
-      quote: "A one-line question in a session that has been open all day uses tokens for the whole conversation, not just the one line.",
+      quote: "A one-line question in a session that has been open all day still draws usage for the whole conversation.",
     },
   },
   "plan-review": {

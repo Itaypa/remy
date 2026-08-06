@@ -602,3 +602,30 @@ Two things to stop doing, recorded as backlog ground rules:
 `isSidechain` was discovered:** the day the host goes *push* — `/doctor` auto-suggesting at
 session start, or `/usage` flags on the statusline — REMY's moat narrows to quantification,
 cross-session memory, and noise discipline. Watch for it by name.
+
+### Citation audit (same night, after the command audit)
+
+The catalog carries 19 expert citations, and `/remy` renders their `quote` in quotation
+marks under **📖 the experts**. A quote is a claim about what a source says, so it decays
+the same way sweep 5's `--resume` hint did. Checked all nine that point at Anthropic docs,
+character by character, against the pages as they read tonight.
+
+**Seven exact. Two had drifted, and both are now corrected:**
+
+| tip | what we quoted | what the doc says now |
+|---|---|---|
+| `cache-idle` | "…uses tokens for the whole conversation, **not just the one line**." | "…still draws usage for the whole conversation." — the closing clause exists nowhere on the page |
+| `claude-md-missing` | "CLAUDE.md is **automatically pulled into context when starting a conversation**." | "CLAUDE.md is a special file that Claude reads at the start of every conversation." |
+
+Neither misquote changed the *advice* — both tips still say the right thing — which is
+exactly why this kind of drift survives: nothing breaks, the number is still right, and
+only the receipt is wrong. For a product whose whole claim is that every figure is
+derivable and every citation real, a paraphrase presented inside quotation marks is the
+one defect that cannot be argued down.
+
+**Recurring task for future sweeps:** re-verify the doc-sourced quotes. The non-Anthropic
+ones (Chroma, Pragmatic Engineer, WorkOS, HumanLayer, Simon Willison, Steve Yegge) are
+published articles rather than living documentation and drift far less, so the nine
+`code.claude.com` citations are the ones worth re-reading. There is no way to test this
+from the suite — the privacy invariant forbids the network in `core` — so it has to be a
+sweep habit rather than a guard.
