@@ -16,6 +16,8 @@ import {
   getSession,
   setSkillPack,
   setSubagentStats,
+  setEffortMix,
+  setAutoMemoryBytes,
 } from "../src/index";
 
 const MARKER = "SUPER_SECRET_PROMPT_BODY_should_never_be_stored";
@@ -304,6 +306,8 @@ describe("privacy gate", () => {
     setClaudeMdBytes(db, "s1", hostile);
     setSkillPack(db, "s1", { bytes: hostile, count: hostile });
     setSubagentStats(db, "s1", { agents: hostile, tokensIn: hostile, tokensOut: hostile, cacheWrite: hostile, tools: hostile, topModel: hostile });
+    setEffortMix(db, "s1", { effortTurns: hostile, effortMaxTurns: hostile, effortHighTurns: hostile, effortMaxOutTokens: hostile });
+    setAutoMemoryBytes(db, "s1", hostile);
 
     const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
     expect(dump).not.toContain(MARKER);
@@ -353,5 +357,25 @@ describe("privacy gate", () => {
         Object.keys(reviewed).sort(),
       );
     }
+  });
+
+  test("no session writer escapes the test above", () => {
+    // The test above is only as good as the list of writers it calls, and that
+    // list is hand-maintained — twice now a new writer shipped without being
+    // added to it, so the "nothing body-like survives" claim quietly stopped
+    // covering the newest column. This makes adding one a decision rather than
+    // an omission: a new set* export in store.ts fails here until it is both
+    // listed and driven with a hostile value above.
+    const src = readFileSync(join(import.meta.dir, "..", "src", "store.ts"), "utf8");
+    const exported = [...src.matchAll(/export function (set[A-Za-z]+)/g)].map((m) => m[1]!).sort();
+    const REVIEWED = [
+      "setAutoMemoryBytes", // sessions.auto_memory_bytes — driven above
+      "setClaudeMdBytes", //   sessions.claude_md_bytes  — driven above
+      "setEffortMix", //       sessions.effort_*         — driven above
+      "setSkillPack", //       sessions.skill_*          — driven above
+      "setSubagentStats", //   sessions.sub_*            — driven above
+      "setSyncState", //       sync_state kv, not a session row; local throttles and markers only
+    ].sort();
+    expect(exported, "a new store writer must be listed here and driven above").toEqual(REVIEWED);
   });
 });
