@@ -212,6 +212,22 @@ const MUTATIONS: Mutation[] = [
     scope: `${CORE}/test/rules.test.ts`,
   },
 
+  // ── the noise budget: one voice, and it must be the right one ───────────
+  {
+    defends: "the one active slot goes to the most valuable tip, not the least",
+    file: `${CORE}/src/tips.ts`,
+    from: "    .query(`SELECT id FROM tips WHERE status = 'queued' ORDER BY est_savings_tokens DESC, id ASC LIMIT 1`)",
+    to: "    .query(`SELECT id FROM tips WHERE status = 'queued' ORDER BY est_savings_tokens ASC, id ASC LIMIT 1`)",
+    scope: `${CORE}/test/scenarios.test.ts`,
+  },
+  {
+    defends: "a model's `why` cannot write escape codes into the statusline",
+    file: `${CORE}/src/adapt.ts`,
+    from: "    .replace(/[\\x00-\\x1f\\x7f]/g, \" \")",
+    to: "",
+    scope: `${CLI}/test/e2e/adapt.e2e.test.ts`,
+  },
+
   // ── the transcript parser ───────────────────────────────────────────────
   {
     defends: "an idle gap means stepping away, not a coffee break",

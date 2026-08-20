@@ -10,7 +10,8 @@
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
     "preflight": "bun scripts/preflight.ts",
-    "mutate": "bun scripts/mutation.ts"
+    "mutate": "bun scripts/mutation.ts",
+    "adapt:smoke": "bun scripts/adapt-smoke.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.23",
