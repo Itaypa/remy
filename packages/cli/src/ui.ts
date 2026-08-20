@@ -55,6 +55,70 @@ export function spendField(cost: number | null | undefined, rateLimits: unknown)
   return rateLimitBadge(rateLimits) ?? fmtCost(cost);
 }
 
+/** Below this, the field goes yellow: the cache is nearly out and wrapping up
+ * before you step away is still a choice you can make. */
+const CACHE_LOW_MS = 10 * 60_000;
+
+/** Model id without the host's context-window qualifier — `claude-opus-5[1m]`
+ * and `claude-opus-5` are one model spelled by two different sources. */
+const baseModel = (id: string): string => id.replace(/\[[^\]]*\]$/, "");
+
+/** The live cache clock — how long this session's prompt cache has left, or
+ * that it has already gone cold.
+ *
+ * This is the one thing on the statusline that a hook could never tell you.
+ * Every other REMY surface speaks when something happens; the cache drains
+ * while nothing happens, so the passive HUD is the only place the number can
+ * land. Its actionable moment is the cold transition: a warm cache re-reads
+ * your whole context at 0.1× the input price, a cold one re-writes it at 2×,
+ * so resuming a fat session cold costs about 20× resuming it warm — which is
+ * the point at which /clear and a one-line brief beats reheating.
+ *
+ * Minute resolution, never seconds. The statusline repaints ~1/s, and a field
+ * that changed every repaint would be motion in the corner of the eye rather
+ * than information.
+ *
+ * Returns null only when the TTL was never observed — the field is otherwise
+ * always present, because a statusline that gains and loses fields is a
+ * different layout every time you glance at it. */
+export function cacheField(
+  ttlMs: number | null | undefined,
+  anchorAt: string | null | undefined,
+  cacheModel: string | null | undefined,
+  liveModel: string | null | undefined,
+  now: number = Date.now(),
+): string | null {
+  if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs <= 0) return null;
+  const cold = ansi("cyan", "🧊 cache cold");
+  // The cache is per-model: switching models leaves the old entry warm but
+  // unreachable, so the session in front of you is cold whatever the clock
+  // says. Switching BACK to a model you used minutes ago also reads as cold
+  // here, which understates the warmth — deliberately the safe direction, and
+  // cheaper than tracking a per-model anchor for a case that costs nothing to
+  // get wrong.
+  //
+  // The two sides come from different places and do NOT spell the model the
+  // same way: cacheModel is the transcript's `message.model`, liveModel is the
+  // statusline payload's `model.id`, and only the payload carries the
+  // context-window qualifier — `claude-opus-5[1m]` against a transcript that
+  // says `claude-opus-5` for the very same turn (see the ModelStr note in
+  // core/src/schema.ts). Compared raw, every 1M-context session reads
+  // permanently cold, which is both wrong and aimed at exactly the users whose
+  // contexts cost the most to re-write. Normalising means a switch BETWEEN
+  // context variants of one model is invisible here — unavoidable, since the
+  // transcript never records the variant at all.
+  if (cacheModel && liveModel && baseModel(cacheModel) !== baseModel(liveModel)) return cold;
+  const anchor = anchorAt ? Date.parse(anchorAt) : NaN;
+  if (!Number.isFinite(anchor)) return null;
+  const left = ttlMs - (now - anchor);
+  if (left <= 0) return cold;
+  // A clock in the future is a clock skew or a hand-edited row, not warmth we
+  // measured — clamp rather than promise more than the TTL.
+  const mins = Math.min(Math.ceil(ttlMs / 60_000), Math.floor(left / 60_000));
+  const value = mins < 1 ? "<1m" : `${mins}m`;
+  return `🔥 cache ${left <= CACHE_LOW_MS ? ansi("yellow", value) : value}`;
+}
+
 export function bar(pct: number, width = 10): string {
   const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width);
   return "▓".repeat(filled) + "░".repeat(width - filled);

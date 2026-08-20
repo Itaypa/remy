@@ -82,6 +82,9 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     effort_max_out: null,
     auto_memory_bytes: null,
     perm_denials: 0,
+    cache_ttl_ms: null,
+    cache_anchor_at: null,
+    cache_model: null,
     ...overrides,
   };
 }

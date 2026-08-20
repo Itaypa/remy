@@ -13,8 +13,9 @@ This file is the single source of truth for working in this repo.
 session *metadata* (never content), detects wasteful patterns with deterministic rules,
 and delivers short, quantified tips through zero-token channels:
 
-- **statusline** — model · context % with a live bar · git branch · your cost or your
-  rate-limit headroom (a pure HUD — tips and version deliberately live elsewhere)
+- **statusline** — model · context % with a live bar · the prompt-cache clock
+  (`🔥 cache 52m` / `🧊 cache cold`) · git branch · your cost or your rate-limit
+  headroom (a pure HUD — tips and version deliberately live elsewhere)
 - **session-start splash** — the rat, your 7-day totals, and one line worth reading
 - **`Stop`-hook nudge** — at most one transient `systemMessage` per turn
 - **the host's own spinner tip line** — via `spinnerTipsOverride` (opt-in, `remy spinner`)

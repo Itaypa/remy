@@ -19,6 +19,9 @@ import {
   readSubagentStats,
   setSubagentStats,
   setEffortMix,
+  setCacheClock,
+  touchCacheAnchor,
+  CACHE_TTL_KEY,
   parseAdaptOutput,
   contextFromPayload,
   binDir,
@@ -56,6 +59,7 @@ import {
 import {
   ansi,
   bar,
+  cacheField,
   contextAlarmLine,
   fmtTok,
   linksEnabled,
@@ -309,6 +313,31 @@ async function ingest(): Promise<void> {
     default:
       break;
   }
+
+  // The cache clock's anchor. These four hooks all fire just after an API
+  // round trip, which is the closest observable moment to "the cache was last
+  // refreshed" — and the only signal available, since nothing fires at all
+  // while the developer sits idle, which is the whole window the clock exists
+  // to describe. Stamped after the switch so the session row already exists
+  // (each of these branches upserts it); an UPDATE against a missing row would
+  // be a silent no-op.
+  //
+  // PermissionDenied and PreCompact are excluded on purpose: neither is a
+  // request boundary, and a denied tool call resetting the clock would show a
+  // warm cache that was never rewritten.
+  if (isCacheAnchorHook(hook)) touchCacheAnchor(db, sessionId, now);
+}
+
+/** Hooks that mark the end of an API round trip — see touchCacheAnchor.
+ *
+ * A function, not a module-level `const Set`: the CLI dispatch switch runs at
+ * the top of this file, so `ingest()` executes before any const declared below
+ * it initializes. A Set here threw "undefined is not an object" into the global
+ * catch, which logs and exits 0 — so the anchor silently never stamped while
+ * every write before it in the same hook landed fine. Same trap as
+ * `clicksAppPath()` further down, and the same fix: declarations hoist. */
+function isCacheAnchorHook(hook: string): boolean {
+  return hook === "SessionStart" || hook === "PostToolUse" || hook === "PostToolUseFailure" || hook === "Stop";
 }
 
 async function analyzeTranscript(
@@ -332,6 +361,10 @@ async function analyzeTranscript(
   // Effort mix comes free with the parse we already did — no extra I/O, so it
   // runs on every analysis rather than only at SessionEnd.
   setEffortMix(db, sessionId, stats);
+  // Same deal for the cache clock: the TTL the host actually bought and the
+  // model that bought it, both straight out of the parse. The statusline reads
+  // these every second and never opens a transcript itself.
+  setCacheClock(db, sessionId, stats.cacheTtlMs, stats.lastTurnModel);
   db.query(
     `UPDATE sessions SET
        tokens_in = ?, tokens_out = ?, cache_read = ?, cache_write = ?,
@@ -521,17 +554,12 @@ function syncSessionStats(
   cost: number | undefined,
   pct: number,
   windowSize: number | null,
+  // Handed in rather than selected here: the render needs the same row for the
+  // cache clock, and one SELECT * beats two partial ones on a path that runs
+  // once a second.
+  row: SessionRow | null,
 ): void {
   try {
-    const row = db
-      .query(`SELECT cost_usd, max_context_pct, model, cwd_hash, context_window FROM sessions WHERE session_id = ?`)
-      .get(sessionId) as {
-      cost_usd: number | null;
-      max_context_pct: number;
-      model: string | null;
-      cwd_hash: string | null;
-      context_window: number | null;
-    } | null;
     if (!row) {
       upsertSession(db, { session_id: sessionId, ts: new Date().toISOString(), model, cwd_hash: cwdHash });
       db.query(
@@ -607,7 +635,8 @@ async function statusline(): Promise<void> {
     hostCtx ?? (typeof payload.transcript_path === "string" ? await tailContext(payload.transcript_path) : null);
   const pct = ctx?.contextPct ?? 0;
   const cost: number | undefined = payload.cost?.total_cost_usd;
-  syncSessionStats(db, sessionId, cwdHash, payload.model?.id, cost, pct, hostCtx?.limit ?? null);
+  const row = getSession(db, sessionId);
+  syncSessionStats(db, sessionId, cwdHash, payload.model?.id, cost, pct, hostCtx?.limit ?? null, row);
 
   const git = await gitStatus(cwd);
 
@@ -617,9 +646,15 @@ async function statusline(): Promise<void> {
   // called that; the space plus yellow puts it in the same "attention, not
   // alarm" register the context percentage already uses.
   const branch = git.branch ? `🌿 ${git.branch}${git.dirty ? ` ${ansi("yellow", "●")}` : ""}` : null;
+  // How long the prompt cache has left. The TTL falls back to the last one
+  // seen on this machine so a session's first tick has a number instead of a
+  // gap — a brand-new session hasn't been analyzed yet, but the host's cache
+  // policy doesn't change between one session and the next.
+  const ttlMs = row?.cache_ttl_ms ?? (Number(getSyncState(db, CACHE_TTL_KEY)) || null);
   const parts = [
     `${modelEmoji(payload.model?.id)} ${payload.model?.display_name ?? "Claude"}`,
     `⚡ ${pctStr} ctx ${bar(pct, 5)}`,
+    cacheField(ttlMs, row?.cache_anchor_at, row?.cache_model, payload.model?.id),
     branch,
     spendField(cost, payload.rate_limits),
   ].filter(Boolean);

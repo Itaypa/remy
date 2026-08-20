@@ -399,6 +399,29 @@ export const TIPS: Record<string, TipDef> = {
       quote: "A one-line question in a session that has been open all day still draws usage for the whole conversation.",
     },
   },
+  // The wisdom half of the cache story. `cache-idle` is the deterministic rule
+  // that fires AFTER a cold resume has already been paid for; this one explains
+  // the 🔥/🧊 statusline clock, which is the only surface that can speak while
+  // the cache is draining (nothing else fires while a developer sits idle).
+  // Deliberately states no TTL: it's 1h on Claude Code today and 5m on the raw
+  // API, the session measures its own, and copy that named a number would go
+  // stale the first time that changed. The 20× IS durable — it's the ratio of
+  // the two published multipliers, 2× to write against 0.1× to read.
+  "cache-clock": {
+    id: "cache-clock",
+    docs: "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+    emoji: "🧊",
+    title: "A warm cache is most of your bill",
+    short: "A cold cache costs 20× → wrap up before you walk off",
+    what: "A warm cache re-reads your whole context at a tenth of the input price; once it expires the next turn re-writes it at double. Same conversation, ~20× the tokens.",
+    fix: "Watch the 🔥 on the statusline — while it's warm, carry on. Once it turns 🧊, resuming a fat session costs more than starting a fresh one: /clear and re-brief instead.",
+    cite: {
+      source: "Anthropic, Prompt caching",
+      url: "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      quote: "1-hour cache write tokens are 2 times the base input tokens price… Cache read tokens are 0.1 times the base input tokens price.",
+    },
+    adaptiveOnly: true,
+  },
   "plan-review": {
     id: "plan-review",
     docs: "https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md",
@@ -428,6 +451,7 @@ export const HINTS: string[] = [
   "⎋ Esc interrupts — steer early instead of paying for the wrong path.",
   "🔓 Approving the same command all day? /fewer-permission-prompts writes the allowlist.",
   "🗂 --resume keeps your context, not your cache — a big session re-reads at full price.",
+  "🔥 The cache clock is real money — 🧊 means the next turn re-writes it all at 2×.",
   "🔖 Checkpoints are a session buffer, not a backup — commit before a risky agent run.",
   '💬 "Once there is a good plan, it will one-shot the implementation." — Boris Cherny',
   '💬 Self-verification is "worth 2–3x on the quality of the final result." — Boris Cherny',

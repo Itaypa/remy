@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BRAND, HINTS, type SessionRow, type TipRow } from "@ccpp/core";
-import { bar, contextAlarmLine, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { bar, cacheField, contextAlarmLine, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -136,6 +136,86 @@ describe("spendField — one field chosen by plan type, never both", () => {
     expect(spendField(null, undefined)).toBeNull();
     expect(spendField(undefined, {})).toBeNull();
   });
+
+describe("cacheField — the one number no hook could ever tell you", () => {
+  const HOUR = 60 * 60_000;
+  const T0 = Date.parse("2026-08-20T12:00:00.000Z");
+  const at = (minsAgo: number) => new Date(T0 - minsAgo * 60_000).toISOString();
+  const plain = (s: string | null) => (s ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+
+  test("says the word 'cache' — an emoji alone is not self-explanatory", () => {
+    // The line already carries four emoji. "🔥 52m" reads as a streak, a timer,
+    // anything; the context field beside it solves this the same way ("48%
+    // ctx"), so the noun is house style. Dropping it back to a bare emoji to
+    // save three columns is what this assertion exists to catch.
+    expect(plain(cacheField(HOUR, at(8), null, null, T0))).toBe("🔥 cache 52m");
+    expect(plain(cacheField(HOUR, at(120), null, null, T0))).toBe("🧊 cache cold");
+  });
+
+  test("counts down in whole minutes, and never in seconds", () => {
+    // The statusline repaints ~1/s. A seconds field would be motion in the
+    // corner of the eye every single repaint; minutes change 60× less often
+    // and carry the same decision.
+    expect(plain(cacheField(HOUR, at(0), null, null, T0))).toBe("🔥 cache 60m");
+    // Exactly a minute left still reads as a minute; only the final partial
+    // one collapses to "<1m", because rounding it up to "1m" would promise
+    // time that has already gone.
+    expect(plain(cacheField(HOUR, at(59), null, null, T0))).toBe("🔥 cache 1m");
+    expect(plain(cacheField(HOUR, at(59.5), null, null, T0))).toBe("🔥 cache <1m");
+    expect(plain(cacheField(HOUR, at(60), null, null, T0))).toBe("🧊 cache cold");
+  });
+
+  test("goes yellow in the last ten minutes — while wrapping up is still a choice", () => {
+    expect(cacheField(HOUR, at(49), null, null, T0)).not.toContain("\x1b[33m");
+    expect(cacheField(HOUR, at(51), null, null, T0)).toContain("\x1b[33m");
+  });
+
+  test("a 5-minute TTL counts down from 5 — nothing here is hardcoded to an hour", () => {
+    // Claude Code buys the 1-hour cache today (all 9,713 cached turns in the
+    // local corpus are ephemeral_1h), but the raw API default is 5 minutes and
+    // a session can drop to it under usage overage. The TTL is measured per
+    // session precisely so this case renders honestly rather than promising
+    // 55 more minutes of warmth that do not exist.
+    expect(plain(cacheField(5 * 60_000, at(2), null, null, T0))).toBe("🔥 cache 3m");
+    expect(plain(cacheField(5 * 60_000, at(6), null, null, T0))).toBe("🧊 cache cold");
+  });
+
+  test("a model switch is cold however fresh the anchor", () => {
+    // The cache is per-model: /model leaves the old entry warm but unreachable.
+    expect(plain(cacheField(HOUR, at(1), "claude-sonnet-5", "claude-opus-5", T0))).toBe("🧊 cache cold");
+    expect(plain(cacheField(HOUR, at(1), "claude-opus-5", "claude-opus-5", T0))).toBe("🔥 cache 59m");
+  });
+
+  test("the 1M-context qualifier is not a different model", () => {
+    // Caught on a real session, not in review. The stored side is the
+    // transcript's `message.model` and the live side is the statusline
+    // payload's `model.id`, and only the payload carries the context-window
+    // qualifier — the same turn is "claude-opus-5" in one and
+    // "claude-opus-5[1m]" in the other. Compared raw, every 1M-context session
+    // renders permanently cold: the clock would be broken for precisely the
+    // users with the most expensive contexts to re-write, and it would look
+    // like working software.
+    expect(plain(cacheField(HOUR, at(1), "claude-opus-5", "claude-opus-5[1m]", T0))).toBe("🔥 cache 59m");
+    expect(plain(cacheField(HOUR, at(1), "claude-opus-5[1m]", "claude-opus-5", T0))).toBe("🔥 cache 59m");
+    // A real switch across the qualifier is still cold.
+    expect(plain(cacheField(HOUR, at(1), "claude-sonnet-5", "claude-opus-5[1m]", T0))).toBe("🧊 cache cold");
+  });
+
+  test("an unobserved TTL renders nothing rather than a guessed hour", () => {
+    // "We never show a number we can't derive" — and a wrong warm reading is
+    // worse than no field, because it tells you to keep a fat session open.
+    expect(cacheField(null, at(1), null, null, T0)).toBeNull();
+    expect(cacheField(0, at(1), null, null, T0)).toBeNull();
+    expect(cacheField(HOUR, null, null, null, T0)).toBeNull();
+    expect(cacheField(HOUR, "not-a-timestamp", null, null, T0)).toBeNull();
+  });
+
+  test("an anchor in the future is clamped to the TTL, not trusted", () => {
+    // Clock skew or a hand-edited row. Promising 70 minutes of a 60-minute
+    // cache would be the one thing this field must never do.
+    expect(plain(cacheField(HOUR, at(-10), null, null, T0))).toBe("🔥 cache 60m");
+  });
+});
 
 describe("splash — the welcome is a moment, not wallpaper", () => {
   const week = { sessions: 3, tokensIn: 1, tokensOut: 1, cacheRead: 0, cost: 0, planSessions: 0, autoCompacts: 0 };

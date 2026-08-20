@@ -32,6 +32,14 @@ export interface TranscriptStats {
   cacheExpiryTokens: number;
   /** Longest idle gap among the expiries, in minutes (0 when none). */
   cacheExpiryWorstGapMinutes: number;
+  /** How long this session's prompt cache lives, read off the last turn that
+   * wrote one (`usage.cache_creation.ephemeral_{1h,5m}_input_tokens`). Null
+   * when no turn wrote a cache — a brand-new or all-error session. */
+  cacheTtlMs: number | null;
+  /** Model of the LAST main-chain turn, not the dominant one: the cache is
+   * per-model, so what matters for "is my cache still warm" is which model
+   * wrote it, even if another model did most of the session's work. */
+  lastTurnModel: string | null;
   /** Highest context any main-chain turn reached, as a percentage of the
    * window — the real peak, not the size at the last turn. */
   maxContextPct: number;
@@ -165,6 +173,30 @@ interface Usage {
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
+  /** Which TTL the write bought. Present on every real turn the local corpus
+   * has (9,713 of them); absent on synthetic and API-error entries. */
+  cache_creation?: {
+    ephemeral_1h_input_tokens?: number;
+    ephemeral_5m_input_tokens?: number;
+  };
+}
+
+export const CACHE_TTL_1H_MS = 60 * 60_000;
+export const CACHE_TTL_5M_MS = 5 * 60_000;
+
+/** How long the cache this turn wrote will live, read off the usage rather
+ * than assumed. Claude Code buys the 1-hour cache — all 9,713 cached turns in
+ * the local corpus are `ephemeral_1h`, none are 5-minute — but a session can
+ * drop to the 5-minute default under usage overage, and the raw API default is
+ * 5 minutes, so the number is measured every time instead of hardcoded.
+ * Returns null for a turn that wrote no cache (it read one, or it is a
+ * synthetic/error entry) — that turn says nothing about the TTL either way. */
+function ttlOf(u: Usage): number | null {
+  const cc = u.cache_creation;
+  if (!cc) return null;
+  if ((cc.ephemeral_1h_input_tokens ?? 0) > 0) return CACHE_TTL_1H_MS;
+  if ((cc.ephemeral_5m_input_tokens ?? 0) > 0) return CACHE_TTL_5M_MS;
+  return null;
 }
 
 function targetOf(input: unknown): string | null {
@@ -395,14 +427,23 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   // 6.00M (+9.4%), with nothing lost, and two sessions that were silent — one
   // with a 1,361-minute gap — become coached.
   const cacheTurns = mainTurns.filter((t) => t.model !== SYNTHETIC_MODEL && contextOf(t.usage) > 0);
+  // The gap the expiry has to outlive is the TTL that was actually bought,
+  // tracked as the walk goes: a turn can only expire the cache the turns
+  // before it wrote. CACHE_EXPIRY_MIN_GAP_MS stays as the fallback for turns
+  // that come before any observed write. On the local corpus this changes
+  // nothing (19 firings / 7.13M tokens either way — every real expiry gap is
+  // ≥85 min), which is the point: it replaces an assumption with the measured
+  // value without moving the behaviour.
+  let ttlMs: number | null = null;
   for (let i = 1; i < cacheTurns.length; i++) {
     const t = cacheTurns[i]!;
-    if (t.afterCompact) continue;
     const prev = cacheTurns[i - 1]!;
+    ttlMs = ttlOf(prev.usage) ?? ttlMs;
+    if (t.afterCompact) continue;
     if (t.model && prev.model && t.model !== prev.model) continue;
     if (t.ts == null || prev.ts == null) continue;
     const gapMs = t.ts - prev.ts;
-    if (gapMs < CACHE_EXPIRY_MIN_GAP_MS) continue;
+    if (gapMs < (ttlMs ?? CACHE_EXPIRY_MIN_GAP_MS)) continue;
     const write = t.usage.cache_creation_input_tokens ?? 0;
     const read = t.usage.cache_read_input_tokens ?? 0;
     if (write >= CACHE_EXPIRY_MIN_WRITE && read < write * 0.25) {
@@ -410,6 +451,17 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
       cacheExpiryTokens += write;
       cacheExpiryWorstGapMinutes = Math.max(cacheExpiryWorstGapMinutes, Math.round(gapMs / 60_000));
     }
+  }
+
+  // What the live cache clock reads: the TTL the most recent write bought, and
+  // the model that wrote it. Last turn, not dominant — the cache is per-model,
+  // so a session that spent an hour on sonnet and just switched to opus has a
+  // cold cache regardless of where its work went.
+  let cacheTtlMs: number | null = null;
+  let lastTurnModel: string | null = null;
+  for (const t of cacheTurns) {
+    cacheTtlMs = ttlOf(t.usage) ?? cacheTtlMs;
+    lastTurnModel = t.model ?? lastTurnModel;
   }
 
   // Red-zone riding: turns that ran with the context ≥80% full. Each turn's
@@ -449,6 +501,8 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     cacheExpiries,
     cacheExpiryTokens,
     cacheExpiryWorstGapMinutes,
+    cacheTtlMs,
+    lastTurnModel,
     redZoneTurns,
     redZoneExcessTokens,
     fatReads,

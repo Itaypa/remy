@@ -64,7 +64,18 @@ carries an exact number.
   red at ≥80%, but the line keeps its shape. Current fields, in order: model
   (emoji + name) · context (`⚡ 48% ctx ▓▓▓░░` — percent + bar; the separate
   `[used/limit 🪙]` token-count badge was dropped as a duplicate of the same
-  number) · git branch + dirty marker (`🌿 main ●`, the dot spaced off the
+  number) · the prompt-cache clock (`🔥 cache 52m`, yellow under 10 min;
+  `🧊 cache cold` in cyan once it expires or the model changes —
+  `cacheField()` in `cli/src/ui.ts`; mechanics in
+  `docs/claude-code-surfaces.md`). It carries the word `cache` for the same
+  reason the field before it says `ctx`: the line already holds four emoji, so
+  a bare `🔥 52m` reads as a streak or a timer. Minute resolution, never
+  seconds — the line repaints every second, and a number that moved on every
+  repaint would be motion rather than information. It is the one field that
+  earns its place on a *passive* HUD, because the cache drains while nothing
+  happens and every other surface here is event-driven: the statusline is the
+  only place that can speak during an idle window · git branch + dirty marker
+  (`🌿 main ●`, the dot spaced off the
   name and yellow so it reads as state rather than as part of the branch;
   from a single `git status --porcelain=v1 --branch` call — absent outside a
   git repo) · session cost

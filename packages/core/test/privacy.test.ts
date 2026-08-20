@@ -18,6 +18,8 @@ import {
   setSubagentStats,
   setEffortMix,
   setAutoMemoryBytes,
+  setCacheClock,
+  touchCacheAnchor,
 } from "../src/index";
 
 const MARKER = "SUPER_SECRET_PROMPT_BODY_should_never_be_stored";
@@ -308,6 +310,8 @@ describe("privacy gate", () => {
     setSubagentStats(db, "s1", { agents: hostile, tokensIn: hostile, tokensOut: hostile, cacheWrite: hostile, tools: hostile, topModel: hostile });
     setEffortMix(db, "s1", { effortTurns: hostile, effortMaxTurns: hostile, effortHighTurns: hostile, effortMaxOutTokens: hostile });
     setAutoMemoryBytes(db, "s1", hostile);
+    setCacheClock(db, "s1", hostile as unknown as number, hostile);
+    touchCacheAnchor(db, "s1", hostile);
 
     const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
     expect(dump).not.toContain(MARKER);
@@ -330,6 +334,8 @@ describe("privacy gate", () => {
         cwd_hash: "Hash16 — one-way, gated at the write site",
         repo_hash: "vestigial; no writer, kept for shape compatibility",
         sub_model: "ModelStr — charset-gated at the write site",
+        cache_anchor_at: "IsoTs — regex-gated at the write site (touchCacheAnchor)",
+        cache_model: "ModelStr — charset-gated at the write site (setCacheClock)",
       },
       events: {
         session_id: "IdStr", ts: "ISO timestamp", host: "HostStr enum-shaped",
@@ -364,17 +370,25 @@ describe("privacy gate", () => {
     // list is hand-maintained — twice now a new writer shipped without being
     // added to it, so the "nothing body-like survives" claim quietly stopped
     // covering the newest column. This makes adding one a decision rather than
-    // an omission: a new set* export in store.ts fails here until it is both
-    // listed and driven with a hostile value above.
+    // an omission: a new set*/touch* export in store.ts fails here until it is
+    // both listed and driven with a hostile value above.
+    //
+    // `touch` joined the pattern when touchCacheAnchor shipped: it writes a
+    // TEXT column on `sessions` exactly like its set* siblings and slipped
+    // straight past a set-only regex — the third instance of the very omission
+    // this test was written to stop, and the first one the test itself allowed.
+    // Any new verb that writes a session row belongs in this alternation.
     const src = readFileSync(join(import.meta.dir, "..", "src", "store.ts"), "utf8");
-    const exported = [...src.matchAll(/export function (set[A-Za-z]+)/g)].map((m) => m[1]!).sort();
+    const exported = [...src.matchAll(/export function ((?:set|touch)[A-Za-z]+)/g)].map((m) => m[1]!).sort();
     const REVIEWED = [
       "setAutoMemoryBytes", // sessions.auto_memory_bytes — driven above
+      "setCacheClock", //      sessions.cache_ttl_ms/cache_model — driven above
       "setClaudeMdBytes", //   sessions.claude_md_bytes  — driven above
       "setEffortMix", //       sessions.effort_*         — driven above
       "setSkillPack", //       sessions.skill_*          — driven above
       "setSubagentStats", //   sessions.sub_*            — driven above
       "setSyncState", //       sync_state kv, not a session row; local throttles and markers only
+      "touchCacheAnchor", //   sessions.cache_anchor_at  — driven above
     ].sort();
     expect(exported, "a new store writer must be listed here and driven above").toEqual(REVIEWED);
   });

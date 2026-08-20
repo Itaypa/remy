@@ -56,6 +56,14 @@ describe("the surfaces a coached developer actually sees", () => {
     // on it is a permanent banner, not information.
     expect(out).not.toContain("tip");
     expect(out).not.toContain("v0.");
+    // The cache clock is the one field that earns its second: it changes on its
+    // own while nothing else does. It stays absent here because these fixture
+    // transcripts carry no `cache_creation` breakdown, so no TTL was ever
+    // observed — "we never show a number we can't derive", and a guessed hour
+    // would tell the developer to keep a fat session open. Its full pipeline
+    // (Stop parses the TTL → statusline renders it) is driven in
+    // packages/cli/test/statusline.test.ts.
+    expect(out).not.toContain("cache");
   });
 
   test("the Stop nudge is the active tip, verbatim", async () => {

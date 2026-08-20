@@ -3,7 +3,7 @@ import { mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envVar } from "./env";
-import { Hash16, ModelStr } from "./schema";
+import { Hash16, IsoTs, ModelStr } from "./schema";
 import type { SessionEvent } from "./schema";
 
 /** `~/.remy`, unless an install predates the rename — then its `~/.coach`
@@ -175,6 +175,21 @@ function migrate(db: Database): void {
   // are indistinguishable from genuinely denial-free ones — any future *rate*
   // rule has to scope its population by started_at rather than trusting a 0.
   addColumnIfMissing(db, "sessions", "perm_denials", "perm_denials INTEGER DEFAULT 0");
+  // The live cache clock (the 🔥/🧊 statusline field). Three values, because
+  // "is my prompt cache still warm" needs all three and none is derivable from
+  // the others:
+  //   cache_ttl_ms    how long a write lives here, measured off the transcript
+  //                   (ephemeral_1h vs ephemeral_5m), never assumed
+  //   cache_anchor_at when a request last refreshed it — stamped by the hooks
+  //                   that fire at a request boundary, NOT by the statusline,
+  //                   which must stay read-only on a quiet session
+  //   cache_model     which model wrote it; the cache is per-model, so a
+  //                   /model switch is a cold cache no matter how recent
+  // NULL on all three = never observed, which the renderer treats as "say
+  // nothing" rather than guessing a TTL.
+  addColumnIfMissing(db, "sessions", "cache_ttl_ms", "cache_ttl_ms INTEGER");
+  addColumnIfMissing(db, "sessions", "cache_anchor_at", "cache_anchor_at TEXT");
+  addColumnIfMissing(db, "sessions", "cache_model", "cache_model TEXT");
   // Generic local kv: tip throttles, spinner ownership, welcome_version,
   // the adaptive analyzer's clock. Named for a sync that no longer exists —
   // kept as-is so an existing ~/.remy/remy.db upgrades without a migration.
@@ -308,6 +323,11 @@ export interface SessionRow {
   auto_memory_bytes: number | null;
   /** Tool calls denied by the host's auto-mode classifier (local-only). */
   perm_denials: number;
+  /** The live cache clock (local-only). NULL = never observed; the statusline
+   * renders nothing rather than guessing a TTL. See the migration comment. */
+  cache_ttl_ms: number | null;
+  cache_anchor_at: string | null;
+  cache_model: string | null;
 }
 
 export interface TipRow {
@@ -444,6 +464,58 @@ export function setEffortMix(db: Database, sessionId: string, s: unknown): void 
     `UPDATE sessions SET effort_turns = ?, effort_max_turns = ?, effort_high_turns = ?, effort_max_out = ?
      WHERE session_id = ?`,
   ).run(...(ok ? vals : [null, null, null, null]), sessionId);
+}
+
+/** Machine-wide fallback for the cache TTL, so a session's very first
+ * statusline tick has a number instead of a blank field. Written whenever a
+ * transcript tells us the real TTL; self-correcting if the host ever switches
+ * (a 5-minute session overwrites it within one turn). */
+export const CACHE_TTL_KEY = "cache_ttl_ms";
+
+/** Stamp "the cache was just refreshed". Called from the hooks that fire at a
+ * request boundary — never from the statusline, which runs ~1/s and must stay
+ * read-only on a quiet session.
+ *
+ * The anchor is the END of the last round trip, while the API measures the TTL
+ * from the START of the request that wrote or read the cache. That makes this
+ * generous by one response duration. Harmless at minute resolution on an hour
+ * clock, and deliberately in the safe direction for the alternative — but it
+ * would matter on a 5-minute TTL, so read this before tightening the display
+ * to seconds. */
+export function touchCacheAnchor(db: Database, sessionId: string, nowIso: string): void {
+  // Gated through IsoTs even though every caller passes its own
+  // `new Date().toISOString()`: this is a TEXT column on `sessions`, and the
+  // privacy suite's standing complaint is that session writers keep shipping
+  // ungated because the value "obviously" came from us. A non-timestamp is
+  // dropped rather than stored.
+  const ts = IsoTs.safeParse(nowIso).data;
+  if (!ts) return;
+  db.query(`UPDATE sessions SET cache_anchor_at = ? WHERE session_id = ?`).run(ts, sessionId);
+}
+
+/** Record what the transcript says about this session's cache: how long a
+ * write lives, and which model wrote it. Both are measured, never assumed —
+ * a NULL here means "we have not seen a cache write yet", which the renderer
+ * shows as nothing rather than as a guess. Deliberately does NOT touch the
+ * anchor: that belongs to touchCacheAnchor alone, so there is exactly one
+ * writer for "when was the cache last refreshed".
+ *
+ * Both columns take the newest reading and fall back to the stored one only
+ * when there is no reading at all — a /model switch is precisely what
+ * cache_model exists to catch, so it must move, and a turn that merely READ
+ * the cache says nothing about the TTL of the entry it read, so a null there
+ * must not erase what an earlier write told us.
+ *
+ * The model goes through ModelStr like every other model write site: schema.ts
+ * documents an earlier version of exactly this that had no gate. */
+export function setCacheClock(db: Database, sessionId: string, ttlMs: number | null, model: string | null): void {
+  const ttl = typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0 ? Math.trunc(ttlMs) : null;
+  const m = ModelStr.safeParse(model).data ?? null;
+  db.query(
+    `UPDATE sessions SET cache_ttl_ms = COALESCE(?, cache_ttl_ms),
+       cache_model = COALESCE(?, cache_model) WHERE session_id = ?`,
+  ).run(ttl, m, sessionId);
+  if (ttl !== null) setSyncState(db, CACHE_TTL_KEY, String(ttl));
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {

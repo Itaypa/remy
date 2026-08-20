@@ -54,17 +54,19 @@ touching the install, run the compiled binary directly.
 raises the version, the launcher finds no matching binary, and downloads the new
 one in the background.)
 
-## The dev-build badge
+## Telling which build you are looking at
 
-The statusline shows `⚙ v<version>+<stamp>` when the binary was built with
-`--channel dev` (the default for `bun run build`); a `--channel release` build
-shows nothing. `REMY_DEV=1/0` forces it either way.
+**There is no dev-build badge on the statusline** — it was dropped along with
+the `💡 1 tip` link, because the line repaints every second and anything static
+on it is a permanent banner. `remy version` prints `<version>+<build stamp>`,
+and the session-start splash carries the version.
 
-It is decided by the **baked-in channel**, not by where the binary sits on disk.
-An earlier version tested whether the running binary was under `.claude/plugins`
-— it never is, so every real install showed a dev badge (fixed in v0.3.1;
-`packages/cli/test/launcher.test.ts` now compiles both channels and asserts the
-rendered statusline).
+`bun run build` still stamps a channel (`--channel dev` by default,
+`--channel release` for shipped binaries), but nothing reads it any more.
+`packages/cli/test/launcher.test.ts` compiles **both** channels and asserts
+neither renders a `⚙`: the badge came back once before, via an execPath test
+that was wrong for every real install, and a compiled-binary check is the only
+thing that would notice it returning.
 
 ## Exercising the waste rules without real sessions
 

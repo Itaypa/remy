@@ -6,7 +6,10 @@ import { classifyCommand, contextFromPayload, parseTranscript, parseTranscriptFi
 
 function assistantLine(opts: {
   id: string;
-  usage?: Record<string, number>;
+  // unknown, not number: real usage carries a nested `cache_creation` object
+  // ({ephemeral_1h_input_tokens, ephemeral_5m_input_tokens}) alongside the flat
+  // counts, and that object is where the cache TTL is readable.
+  usage?: Record<string, unknown>;
   content?: unknown[];
   sidechain?: boolean;
   model?: string;
@@ -244,6 +247,89 @@ describe("classifyCommand", () => {
       expect(classifyCommand(cmd)).toBe(expected);
     });
   }
+});
+
+describe("cache TTL — measured off the transcript, never assumed", () => {
+  // The whole cache clock rests on this: which TTL the host actually bought.
+  // It is readable per turn, so it is read rather than guessed — Claude Code
+  // buys the 1-hour cache today (all 9,713 cached turns in the local corpus
+  // are ephemeral_1h, none 5-minute), the raw API default is 5 minutes, and a
+  // session can drop to it under usage overage.
+  const write = (id: string, atMin: number, ttl: "1h" | "5m" | null, tokens = 140_000) =>
+    assistantLine({
+      id,
+      atMin,
+      usage: {
+        input_tokens: 500,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: tokens,
+        ...(ttl
+          ? {
+              cache_creation: {
+                ephemeral_1h_input_tokens: ttl === "1h" ? tokens : 0,
+                ephemeral_5m_input_tokens: ttl === "5m" ? tokens : 0,
+              },
+            }
+          : {}),
+      },
+    });
+
+  test("an ephemeral_1h write reads as an hour", () => {
+    expect(parseTranscript(write("m1", 0, "1h"), 200_000).cacheTtlMs).toBe(60 * 60_000);
+  });
+
+  test("an ephemeral_5m write reads as five minutes", () => {
+    expect(parseTranscript(write("m1", 0, "5m"), 200_000).cacheTtlMs).toBe(5 * 60_000);
+  });
+
+  test("no cache_creation breakdown at all reads as null, not as a default", () => {
+    // Older hosts, synthetic turns, API-error entries. Null is what makes the
+    // statusline render nothing instead of a guessed hour.
+    expect(parseTranscript(write("m1", 0, null), 200_000).cacheTtlMs).toBeNull();
+  });
+
+  test("the latest write wins — a session that switches TTL mid-flight follows it", () => {
+    const stats = parseTranscript([write("m1", 0, "1h"), write("m2", 5, "5m")].join("\n"), 200_000);
+    expect(stats.cacheTtlMs).toBe(5 * 60_000);
+  });
+
+  test("lastTurnModel is the last turn, not the dominant one — the cache is per-model", () => {
+    // dominantModel() answers "who did the work"; the cache clock needs "who
+    // holds the cache right now", and after a /model switch those differ.
+    const stats = parseTranscript(
+      [
+        assistantLine({ id: "m1", atMin: 0, model: "claude-sonnet-5", usage: { output_tokens: 90_000, input_tokens: 500 } }),
+        assistantLine({ id: "m2", atMin: 5, model: "claude-opus-5", usage: { output_tokens: 10, input_tokens: 500 } }),
+      ].join("\n"),
+      200_000,
+    );
+    expect(stats.model).toBe("claude-sonnet-5"); // dominant, by output tokens
+    expect(stats.lastTurnModel).toBe("claude-opus-5"); // who holds the cache
+  });
+
+  test("the expiry gap threshold follows the observed TTL, not a hardcoded 30 minutes", () => {
+    // A 45-minute gap is an expiry under the old fixed floor, but on a 1-hour
+    // cache the entry was still warm — so a re-write there was a tool-list or
+    // system-prompt change, not the developer stepping away, and blaming
+    // idleness for it would be a wrong tip. Measured on the local corpus this
+    // moves nothing (19 firings / 7.13M tokens either way; every real expiry
+    // gap is ≥85 min) — it replaces the assumption with the number.
+    const warm = (id: string, atMin: number) =>
+      assistantLine({ id, atMin, usage: { input_tokens: 500, cache_read_input_tokens: 140_000, cache_creation_input_tokens: 1_000 } });
+
+    const held = parseTranscript([write("m1", 0, "1h"), warm("m2", 2), write("m3", 47, "1h")].join("\n"), 200_000);
+    expect(held.cacheExpiries).toBe(0);
+
+    // Past the hour, the same shape is a genuine expiry.
+    const expired = parseTranscript([write("m1", 0, "1h"), warm("m2", 2), write("m3", 70, "1h")].join("\n"), 200_000);
+    expect(expired.cacheExpiries).toBe(1);
+    expect(expired.cacheExpiryWorstGapMinutes).toBe(68);
+
+    // And on a 5-minute cache the same 45-minute gap IS an expiry — the two
+    // cases must not share a threshold.
+    const short = parseTranscript([write("m1", 0, "5m"), warm("m2", 2), write("m3", 47, "5m")].join("\n"), 200_000);
+    expect(short.cacheExpiries).toBe(1);
+  });
 });
 
 describe("cache-expiry detection (timestamp-verified idle gaps that re-wrote a fat context)", () => {

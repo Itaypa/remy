@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,5 +144,130 @@ describe("coach statusline — one constant layout", () => {
     const out = await runStatusline(basePayload());
     expect(out).toContain("$1.23");
     expect(out).not.toContain("⏳");
+  }, 10_000);
+});
+
+// The cache clock is the one statusline field with a whole pipeline behind it:
+// a Stop hook parses the transcript for the TTL the host bought and stamps an
+// anchor, and the statusline reads both back without opening a file. Unit
+// tests cover the arithmetic (cacheField in ui.test.ts); these prove the wiring
+// survives two separate processes and a real database.
+describe("the cache clock, end to end", () => {
+  const transcriptLine = (id: string, ttlKey: string) =>
+    JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      timestamp: new Date().toISOString(),
+      message: {
+        id,
+        model: "claude-fable-5",
+        usage: {
+          input_tokens: 500,
+          output_tokens: 100,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 140_000,
+          cache_creation: { [ttlKey]: 140_000 },
+        },
+        content: [],
+      },
+    });
+
+  async function stopHook(transcriptPath: string): Promise<void> {
+    const proc = Bun.spawn([process.execPath, CLI_ENTRY, "ingest"], {
+      stdin: Buffer.from(
+        JSON.stringify({ hook_event_name: "Stop", session_id: "sess-1", cwd: repoDir, transcript_path: transcriptPath }),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, REMY_DATA_DIR: dataDir, REMY_HOME: dataDir, REMY_SETTINGS_PATH: join(dataDir, "settings.json") },
+    });
+    await proc.exited;
+  }
+
+  function backdateAnchor(minutesAgo: number): void {
+    const db = new Database(join(dataDir, "remy.db"));
+    db.query(`UPDATE sessions SET cache_anchor_at = ? WHERE session_id = 'sess-1'`).run(
+      new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+    );
+    db.close();
+  }
+
+  test("the Stop hook itself stamps the anchor — a turn just ended reads as fully warm", async () => {
+    // Deliberately does NOT pre-write the anchor. An earlier version of this
+    // test backdated it by hand before rendering, which exercised the
+    // arithmetic and skipped the stamping — and the stamping was broken:
+    // the hook set threw into the global catch, which logs and exits 0, so
+    // every other write in the same hook landed and the anchor silently never
+    // did. The clock read empty on a real session while this suite was green.
+    // Nothing here may write cache_anchor_at except the hook under test.
+    const path = join(repoDir, "t.jsonl");
+    writeFileSync(path, transcriptLine("m1", "ephemeral_1h_input_tokens"));
+    await stopHook(path);
+
+    const db = new Database(join(dataDir, "remy.db"), { readonly: true });
+    const row = db.query(`SELECT cache_anchor_at, cache_ttl_ms FROM sessions WHERE session_id = 'sess-1'`).get() as
+      | { cache_anchor_at: string | null; cache_ttl_ms: number | null }
+      | null;
+    db.close();
+    expect(row?.cache_anchor_at, "the Stop hook did not stamp the cache anchor").toBeTruthy();
+    expect(row?.cache_ttl_ms).toBe(60 * 60_000);
+
+    // The word is not decoration. The line already carries four emoji, so a
+    // bare "🔥 52m" reads as a streak or a timer; the context field beside it
+    // labels itself the same way ("48% ctx"). Trimming this back to save three
+    // columns is what this assertion exists to catch.
+    // 59 or 60: the hook and the render are two separate process spawns, and
+    // the clock floors rather than rounds — it never promises time already
+    // spent. Either reading proves the stamp happened just now.
+    const out = stripAnsi(await runStatusline(basePayload()));
+    expect(out).toMatch(/🔥 cache (59|60)m/);
+  }, 20_000);
+
+  test("the clock ticks down from the anchor", async () => {
+    const path = join(repoDir, "t.jsonl");
+    writeFileSync(path, transcriptLine("m1", "ephemeral_1h_input_tokens"));
+    await stopHook(path);
+    // Half a minute off a whole number: the render happens a few ms after the
+    // backdate, so an exact 8 would floor to 51 or 52 depending on the machine.
+    backdateAnchor(8.5);
+
+    expect(stripAnsi(await runStatusline(basePayload()))).toContain("🔥 cache 51m");
+  }, 20_000);
+
+  test("idle past the TTL → cold, and the rest of the line is untouched", async () => {
+    const path = join(repoDir, "t.jsonl");
+    writeFileSync(path, transcriptLine("m1", "ephemeral_1h_input_tokens"));
+    await stopHook(path);
+    backdateAnchor(90);
+
+    const out = stripAnsi(await runStatusline(basePayload()));
+    expect(out).toContain("🧊 cache cold");
+    // One constant layout: going cold colours a field, it does not restructure
+    // the line or evict anything.
+    expect(out).toContain("Fable");
+    expect(out).toContain("🌿 main");
+    expect(out).toContain("$1.23");
+  }, 20_000);
+
+  test("a 5-minute session goes cold in five minutes, not in an hour", async () => {
+    // Nothing in the pipeline hardcodes an hour: the TTL the host bought is
+    // carried from the transcript to the render. A session under usage overage
+    // drops to the 5-minute cache, and telling it "cache 52m" would be an
+    // invitation to leave a fat session open on a cache that is already gone.
+    const path = join(repoDir, "t.jsonl");
+    writeFileSync(path, transcriptLine("m1", "ephemeral_5m_input_tokens"));
+    await stopHook(path);
+    backdateAnchor(8);
+
+    expect(stripAnsi(await runStatusline(basePayload()))).toContain("🧊 cache cold");
+  }, 20_000);
+
+  test("a session we have never analyzed shows no clock rather than a guessed one", async () => {
+    // No Stop hook has run, so no TTL has ever been observed on this machine.
+    // A wrong warm reading is worse than no field: it says "keep this fat
+    // session open", which is the exact advice the tip exists to prevent.
+    const out = stripAnsi(await runStatusline(basePayload()));
+    expect(out).not.toContain("cache");
+    expect(out).toContain("Fable"); // ...and the rest of the HUD still renders
   }, 10_000);
 });

@@ -28,6 +28,7 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "rule-of-five": {},
   "spec-first": {},
   "cache-idle": { count: 3, mins: 145 },
+  "cache-clock": {},
   "plan-review": {},
 };
 
