@@ -110,13 +110,12 @@ describe("plugin launcher", () => {
   });
 });
 
-// The dev-build badge is decided by the baked-in channel, not by where the
-// binary sits on disk. An earlier version tested `process.execPath` against
-// ".claude/plugins" — but the plugin ships a launcher and the real binary
-// always lives in ~/.remy/bin, so that test was false for EVERY install and
-// every real user saw a dev badge. Compile both channels and check the
-// rendered statusline, since that is the only place the badge appears.
-describe("dev-build badge — channel decides, not the binary's location", () => {
+// The ⚙ dev-build badge is gone: the statusline is a pure HUD, and the
+// version lives in `remy version` and the splash instead. This compiles both
+// channels and checks the rendered statusline anyway, because the badge has
+// come back once before (via an execPath test that was wrong for every real
+// install) — a compiled-binary check is the only thing that would notice.
+describe("no build badge — the statusline is channel-blind", () => {
   const PAYLOAD = JSON.stringify({
     session_id: "badge",
     workspace: { current_dir: "/tmp" },
@@ -150,8 +149,8 @@ describe("dev-build badge — channel decides, not the binary's location", () =>
     return text;
   }
 
-  test("a release build shows no ⚙ badge; a dev build does", async () => {
+  test("neither a release build nor a dev build shows a ⚙ badge", async () => {
     expect(await statuslineFor("release")).not.toContain("⚙");
-    expect(await statuslineFor("dev")).toContain("⚙");
+    expect(await statuslineFor("dev")).not.toContain("⚙");
   }, 120_000);
 });

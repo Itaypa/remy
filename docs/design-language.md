@@ -72,11 +72,14 @@ carries an exact number.
   session cost (`$1.23`) for API/pay-per-token accounts, or rate-limit %
   (`⏳ 42% (5h)`, whichever of the 5h/7d window is closer to its cap) for
   Claude.ai Pro/Max subscribers (`payload.rate_limits` present) —
-  `spendField()` in `cli/src/ui.ts` · a `💡 1 tip` indicator (link only, no
-  content) when a tip is queued · the dev build badge. Streak (`🔥 Nd`),
-  session cache-hit % (`💾`), and XP level (`⭐ Lv`) were all tried and
-  dropped — streak/achievements/XP are gone from the product entirely (see
-  below), and cache-hit was low-signal clutter even before that. A
+  `spendField()` in `cli/src/ui.ts`. Nothing else: the `💡 1 tip` indicator
+  and the dev build badge were dropped as noise (the statusline repaints
+  every second, so anything static on it is a permanent banner — the tip
+  belongs to the splash and the Stop nudge, the version to `remy version`).
+  Streak (`🔥 Nd`), session cache-hit % (`💾`), and XP level (`⭐ Lv`) were
+  all tried and dropped — streak/achievements/XP are gone from the product
+  entirely (see below), and cache-hit was low-signal clutter even before
+  that. A
   `refreshInterval` in the statusLine settings (installed by `remy init`)
   keeps these fields fresh between host-triggered repaints; without it the
   statusline only updates on session start, a new assistant message,

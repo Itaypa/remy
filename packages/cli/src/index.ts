@@ -58,7 +58,6 @@ import {
   bar,
   contextAlarmLine,
   fmtTok,
-  linkify,
   linksEnabled,
   modelEmoji,
   renderReport,
@@ -88,22 +87,6 @@ const ADAPT_THROTTLE_MS = 24 * 60 * 60 * 1000; // one analyzer call per day, max
 // Injected by scripts/build-plugin.ts via --define; absent when running from source.
 declare const REMY_BUILD_ID: string | undefined;
 const BUILD_ID = typeof REMY_BUILD_ID === "string" ? REMY_BUILD_ID : "src";
-declare const REMY_CHANNEL: string | undefined;
-const CHANNEL = typeof REMY_CHANNEL === "string" ? REMY_CHANNEL : "dev";
-
-/** Dev install = this binary was not stamped by a release build.
- *
- * Decided by the baked-in channel, NOT by where the binary sits: since the
- * plugin ships a launcher and the real binary always lives in ~/.remy/bin,
- * an execPath test ("is it under .claude/plugins?") is false for every
- * install that has ever existed — which showed the dev badge to real users.
- * REMY_DEV=1/0 overrides. */
-function isDevInstall(): boolean {
-  if (envVar("DEV") === "1") return true;
-  if (envVar("DEV") === "0") return false;
-  return CHANNEL !== "release";
-}
-
 const argv = process.argv.slice(2);
 const cmd = argv[0] ?? "help";
 
@@ -626,7 +609,6 @@ async function statusline(): Promise<void> {
   const cost: number | undefined = payload.cost?.total_cost_usd;
   syncSessionStats(db, sessionId, cwdHash, payload.model?.id, cost, pct, hostCtx?.limit ?? null);
 
-  const tip = activeTip(db);
   const git = await gitStatus(cwd);
 
   const pctStr = pct >= 80 ? ansi("red", `${pct}%`) : pct >= 60 ? ansi("yellow", `${pct}%`) : `${pct}%`;
@@ -640,8 +622,6 @@ async function statusline(): Promise<void> {
     `⚡ ${pctStr} ctx ${bar(pct, 5)}`,
     branch,
     spendField(cost, payload.rate_limits),
-    tip ? linkify("💡 1 tip", actionUrl("remy") ?? TIPS[tip.tip_id]?.docs) : null,
-    isDevInstall() ? ansi("dim", `⚙ v${VERSION}+${BUILD_ID}`) : null,
   ].filter(Boolean);
   console.log(parts.join(ansi("dim", " · ")));
 }
@@ -657,15 +637,6 @@ async function statusline(): Promise<void> {
 // later const declarations initialize.
 function clicksAppPath(): string {
   return join(dataDir(), "RemyClicks.app");
-}
-
-function clickActionsInstalled(): boolean {
-  return process.platform === "darwin" && existsSync(clicksAppPath());
-}
-
-/** remy://<cmd> when the click handler is installed, else undefined (plain text). */
-function actionUrl(cmd: string): string | undefined {
-  return clickActionsInstalled() ? `remy://${cmd}` : undefined;
 }
 
 async function installClickActions(): Promise<void> {

@@ -14,7 +14,7 @@ session *metadata* (never content), detects wasteful patterns with deterministic
 and delivers short, quantified tips through zero-token channels:
 
 - **statusline** — model · context % with a live bar · git branch · your cost or your
-  rate-limit headroom · a `💡 1 tip` link
+  rate-limit headroom (a pure HUD — tips and version deliberately live elsewhere)
 - **session-start splash** — the rat, your 7-day totals, and one line worth reading
 - **`Stop`-hook nudge** — at most one transient `systemMessage` per turn
 - **the host's own spinner tip line** — via `spinnerTipsOverride` (opt-in, `remy spinner`)
@@ -141,7 +141,8 @@ launcher builds its URL from that manifest, so a mismatch = every install silent
 nothing), cross-compiles darwin-arm64/x64 + linux-x64/arm64, and publishes the assets plus
 `checksums.txt`. `ci.yml` runs typecheck + tests + `sh -n` on the launcher for every push.
 Version lives in **one** place — `plugin.json` — and is baked into the binary via
-`--define REMY_VERSION`; `REMY_CHANNEL=release` is what turns off the dev build badge.
+`--define REMY_VERSION`; `REMY_CHANNEL=release` still stamps release binaries, but
+nothing reads it anymore since the dev build badge left the statusline.
 
 **Known gaps:** the `.github/workflows/` files are not in git — the `gh` OAuth token
 lacks the `workflow` scope, so releases are cut by hand (`bun run preflight`, build four

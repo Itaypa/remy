@@ -132,10 +132,11 @@ field, chosen by plan type — never both**: session cost (`$1.23`) for
 API/pay-per-token accounts, or rate-limit % (`⏳ 42% (5h)`, whichever of the
 5h/7d window is closer to its cap) for Claude.ai Pro/Max subscribers
 (`payload.rate_limits` present) — `spendField()` in `cli/src/ui.ts`, which
-chains `rateLimitBadge() ?? fmtCost()` · a `💡 1 tip` link (no content — the
-tip itself only ever renders in the splash and the Stop-hook nudge) · the
-dev build badge. (A session cache-hit % field, and gamification — XP level,
-streak — were all tried and dropped; see `docs/design-language.md`.) The 🪙
+chains `rateLimitBadge() ?? fmtCost()`. That's the whole line — a pure HUD.
+(A `💡 1 tip` link, the dev build badge, a session cache-hit % field, and
+gamification — XP level, streak — were all tried and dropped; the tip renders
+in the splash and the Stop-hook nudge, the version in `remy version` and the
+splash. See `docs/design-language.md`.) The 🪙
 coin is the brand's token unit. ANSI is allowed here and only here.
 
 ## Spinner tip line (`spinnerTipsOverride`)

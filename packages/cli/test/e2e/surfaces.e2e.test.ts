@@ -42,20 +42,20 @@ const statusPayload = (w: World, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("the surfaces a coached developer actually sees", () => {
-  test("the statusline offers exactly one tip, however many are queued", async () => {
+  test("the statusline is a pure HUD — no tip, no version, however bad the session", async () => {
     await driveSession(w, CHAOS);
     expect(tips(w).length).toBe(5);
 
     const out = stripAnsi((await remy(w, ["statusline"], statusPayload(w))).stdout);
-    expect(out).toContain("💡 1 tip");
     expect(out).toContain("Fable 5");
     expect(out).toContain("ctx");
     expect(out).toContain("$1.23");
-  });
-
-  test("a clean session's statusline has nothing to offer", async () => {
-    const out = stripAnsi((await remy(w, ["statusline"], statusPayload(w))).stdout);
+    // Tips live on the splash, the Stop nudge, and /remy — never here. The
+    // version lives in `remy version` and the splash. Both were dropped from
+    // the statusline as noise: it repaints every second, so anything static
+    // on it is a permanent banner, not information.
     expect(out).not.toContain("tip");
+    expect(out).not.toContain("v0.");
   });
 
   test("the Stop nudge is the active tip, verbatim", async () => {
