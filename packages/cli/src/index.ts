@@ -55,6 +55,7 @@ import {
   TIPS,
   type Finding,
   type SessionRow,
+  type TipRow,
 } from "@ccpp/core";
 import {
   ansi,
@@ -70,6 +71,7 @@ import {
   spendField,
   splash,
   tipLine,
+  tipLineLong,
   weekTotals,
 } from "./ui";
 import {
@@ -80,6 +82,7 @@ import {
   spinnerEnabled,
   syncSpinnerTips,
 } from "./spinner";
+import { fileHashesIn, fileVar, resolveTargets } from "./resolve";
 
 // Baked in by scripts/build-plugin.ts from the plugin manifest — one version
 // number for the plugin, the binary, and the release asset names.
@@ -191,7 +194,8 @@ async function ingest(): Promise<void> {
         // Claim the spinner tip line for this session while we're here — the
         // host reads settings.json at startup, so SessionStart is the moment
         // the line is set for every wait that follows.
-        syncSpinnerTips(db, openTips(db));
+        const open = openTips(db);
+        syncSpinnerTips(db, open, tipContext(db, sessionId, open, payload.cwd));
         console.log(JSON.stringify({ systemMessage: message }));
       }
       break;
@@ -257,10 +261,19 @@ async function ingest(): Promise<void> {
           : `UPDATE sessions SET compacts_manual = compacts_manual + 1 WHERE session_id = ?`,
       ).run(sessionId);
       if (trigger === "auto") {
+        // The hook fires before any transcript parse, so the peak comes off
+        // the session row. Falling back to 100 is not a guess: auto-compact
+        // only fires because the window filled.
+        const limit = contextLimit();
         const finding: Finding = {
           tipId: "auto-compact",
-          evidence: { count: 1 },
-          estSavingsTokens: Math.round(contextLimit() * 0.3),
+          evidence: {
+            count: 1,
+            peak_pct: Math.round(getSession(db, sessionId)?.max_context_pct || 100),
+            window_k: Math.round(limit / 1000),
+          },
+          estSavingsTokens: Math.round(limit * 0.3),
+          estClass: "input",
         };
         recordFindings(db, sessionId, [finding], now);
       }
@@ -294,12 +307,21 @@ async function ingest(): Promise<void> {
           const contextTip = tip?.tip_id === "context-band" || tip?.tip_id === "auto-compact";
           if (tip && !(inAlarmZone && contextTip) && dueForStopNudge(db, tip.tip_id, now)) {
             markStopNudgeShown(db, tip.tip_id, now);
-            console.log(JSON.stringify({ systemMessage: tipLine(tip) }));
+            // tipLineLong, not tipLine: this is a full-width transient
+            // systemMessage, so there is no reason to squeeze it into the
+            // 55-char form the boxed splash needs.
+            const ctx = tipContext(db, sessionId, [tip], payload.cwd);
+            console.log(
+              JSON.stringify({
+                systemMessage: tipLineLong(tip, ctx.session, fileVar(tip.evidence, ctx.files)),
+              }),
+            );
           }
         }
         // Findings that landed this turn belong on the spinner for the next
         // wait, not the next session. Writes only when the line changed.
-        syncSpinnerTips(db, openTips(db));
+        const open = openTips(db);
+        syncSpinnerTips(db, open, tipContext(db, sessionId, open, payload.cwd));
       }
       if (hook === "SessionEnd") {
         db.query(`UPDATE sessions SET ended_at = ? WHERE session_id = ?`).run(now, sessionId);
@@ -338,6 +360,56 @@ async function ingest(): Promise<void> {
  * `clicksAppPath()` further down, and the same fix: declarations hoist. */
 function isCacheAnchorHook(hook: string): boolean {
   return hook === "SessionStart" || hook === "PostToolUse" || hook === "PostToolUseFailure" || hook === "Stop";
+}
+
+/** What a coaching line needs beyond the tip row: the session to price its
+ * earn against, and hash→filename for the working tree.
+ *
+ * A `function` declaration for the reason documented above — this is called
+ * from the hook dispatch, which runs before anything below it initializes.
+ *
+ * The filename half only resolves for someone who has the files on disk, which
+ * is exactly the guarantee that lets it exist at all: no name is stored, it is
+ * re-derived per render by hashing the local tree. An unresolvable hash yields
+ * no `{file}` at all and the catalog's fallback wording stands in. */
+function tipContext(
+  db: ReturnType<typeof openDb>,
+  sessionId: string | null | undefined,
+  tips: TipRow[],
+  cwd: unknown,
+): { session: SessionRow | null; files: Map<string, string> } {
+  const session = sessionId ? getSession(db, sessionId) : null;
+  const dir = typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd();
+  const files = resolveTargets(fileHashesIn(tips.map((t) => t.evidence)), dir);
+  return { session, files };
+}
+
+/** The same, for the interactive commands, which get no hook payload: the
+ * shell's cwd is the project, and the session to price against is the most
+ * recent one for it that CAN price.
+ *
+ * "Most recent" alone is not enough. A session row exists from its first hook,
+ * before any tokens are recorded, and there are degenerate rows besides — on
+ * this machine the newest row for the repo is a demo session with a cost and
+ * zero tokens. Priced against that, every earn divides by zero and the whole
+ * deck silently falls back to coins. So the pick is the newest row with both a
+ * cost and a token mix; failing that, no session, and the fallback is honest
+ * rather than accidental. */
+function cliTipContext(
+  db: ReturnType<typeof openDb>,
+  tips: TipRow[],
+): { session: SessionRow | null; files: Map<string, string> } {
+  const cwdHash = hashPath(process.cwd());
+  const priceable = db
+    .query(
+      `SELECT * FROM sessions
+        WHERE cwd_hash = ? AND cost_usd > 0
+          AND (tokens_in + tokens_out + cache_read + cache_write) > 0
+        ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(cwdHash) as SessionRow | null;
+  const session = priceable ?? latestSessionForCwd(db, cwdHash);
+  return tipContext(db, session?.session_id, tips, process.cwd());
 }
 
 async function analyzeTranscript(
@@ -402,10 +474,13 @@ async function analyzeTranscript(
     cacheExpiryWorstGapMinutes: stats.cacheExpiryWorstGapMinutes,
     redZoneTurns: stats.redZoneTurns,
     redZoneExcessTokens: stats.redZoneExcessTokens,
+    assistantTurns: stats.assistantTurns,
+    maxContextPct: stats.maxContextPct,
     fatReads: stats.fatReads,
     fatReadTokens: stats.fatReadTokens,
     fatReadWorstTokens: stats.fatReadWorstTokens,
     fatReadTargets: stats.fatReadTargets,
+    fatReadWorstTarget: stats.fatReadWorstTarget,
     // NULL when SessionStart never ran for this id (plugin installed
     // mid-session, or a --continue into an older session) — the rules read
     // that as "unknown" and stay quiet.
@@ -761,11 +836,18 @@ function report(args: string[]): void {
     return;
   }
   const adaptLast = getSyncState(db, "last_adapt_at");
+  // The report is the one surface with a generous budget, so it resolves
+  // filenames for every tip it is about to print, not just the active one.
+  const files = resolveTargets(
+    fileHashesIn([...tips, ...(active ? [active] : [])].map((t) => t.evidence)),
+    process.cwd(),
+  );
   console.log(
     renderReport({
       session,
       tips,
       active,
+      files,
       adaptive: { enabled: adaptEnabled(db), lastRunHours: adaptLast ? hoursAgo(adaptLast) : null },
     }),
   );
@@ -786,10 +868,12 @@ function dismiss(args: string[]): void {
   const next = dismissTip(db, requested, now);
   const def = TIPS[dismissedId];
   console.log(`🐭 snoozed ${def ? `${def.emoji} ${def.title}` : dismissedId} for 30 days.`);
-  if (next) console.log(`💡 up next: ${tipLine(next)}`);
+  const open = openTips(db);
+  const ctx = cliTipContext(db, next ? [...open, next] : open);
+  if (next) console.log(`💡 up next: ${tipLineLong(next, ctx.session, fileVar(next.evidence, ctx.files))}`);
   // A snoozed tip must leave the spinner too, or dismissing it changes nothing
   // where the user actually reads it.
-  syncSpinnerTips(db, openTips(db));
+  syncSpinnerTips(db, open, ctx);
 }
 
 // --------------------------------------------------------------- spinner
@@ -808,7 +892,8 @@ function spinner(args: string[]): void {
   }
   if (args.includes("--status")) {
     const open = openTips(db);
-    const owned = syncSpinnerTips(db, open);
+    const ctx = cliTipContext(db, open);
+    const owned = syncSpinnerTips(db, open, ctx);
     const state = !spinnerEnabled()
       ? "off (COACH_SPINNER=0)"
       : owned.status === "unclaimed"
@@ -817,13 +902,14 @@ function spinner(args: string[]): void {
           ? "held by a spinnerTipsOverride remy didn't write"
           : "on";
     console.log(`🐭 spinner tips: ${state} → ${path}`);
-    const deck = desiredTips(open);
+    const deck = desiredTips(open, ctx);
     console.log(`   rotating ${deck.length} line(s):`);
     for (const line of deck.slice(0, 5)) console.log(`   · ${line}`);
     if (deck.length > 5) console.log(`   · …and ${deck.length - 5} more`);
     return;
   }
-  const out = claimSpinnerTips(db, openTips(db));
+  const claiming = openTips(db);
+  const out = claimSpinnerTips(db, claiming, cliTipContext(db, claiming));
   switch (out.status) {
     case "user-owned":
       console.log(`⚠️  ${path} already has a spinnerTipsOverride remy didn't write — leaving it alone.`);

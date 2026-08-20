@@ -113,6 +113,10 @@ function migrate(db: Database): void {
   // Adaptive-analyzer explanation ("why you're seeing this"); deterministic
   // tips render theirs from evidence templates and leave this NULL.
   addColumnIfMissing(db, "tips", "why", "why TEXT");
+  // Price class of est_savings_tokens (rules.ts EstClass). A closed enum, so
+  // it carries no free text; without it a raw token count is not comparable
+  // between tips and cannot be turned into money.
+  addColumnIfMissing(db, "tips", "est_class", "est_class TEXT");
   db.run(`CREATE TABLE IF NOT EXISTS tip_memory (
     tip_id TEXT PRIMARY KEY,
     last_shown_at TEXT,
@@ -206,6 +210,22 @@ function migrate(db: Database): void {
     // figure indefinitely and go on winning the one active-tip slot.
     db.query(`UPDATE tips SET est_savings_tokens = 0
               WHERE tip_id = 'subagent-offload' AND status IN ('active','queued')`).run();
+  });
+  runOnce(db, "tip_est_class_backfill", () => {
+    // Same reasoning as the reset above, one step further. A tip row keeps the
+    // numbers it was filed with until its rule fires again, so an open row
+    // would otherwise sit at the neutral 1× class forever — and for
+    // `context-band`, whose estimate is a sum of cache-read context, that is
+    // exactly the 10× overstatement this column exists to end.
+    db.query(`UPDATE tips SET est_class = CASE tip_id
+                WHEN 'context-band' THEN 'cache-read'
+                WHEN 'cache-idle'   THEN 'cold-write'
+                ELSE 'input' END
+              WHERE est_class IS NULL`).run();
+    // `no-verify` carried a flat 10,000 that no measurement produced. Skipping
+    // a verify pass ships bugs; it does not spend tokens.
+    db.query(`UPDATE tips SET est_savings_tokens = 0
+              WHERE tip_id = 'no-verify' AND status IN ('active','queued')`).run();
   });
 }
 
@@ -339,6 +359,9 @@ export interface TipRow {
   evidence: string | null;
   est_savings_tokens: number;
   why: string | null;
+  /** rules.ts EstClass; NULL on rows written before it existed, which the
+   * renderer reads as the neutral "input" class. */
+  est_class: string | null;
 }
 
 export function insertEvent(db: Database, ev: SessionEvent): void {

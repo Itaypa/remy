@@ -1,15 +1,36 @@
 // Curated tip catalog — written once, reused by every host adapter.
-// `short` templates render into every tip surface (statusline, splash,
-// Stop-hook nudge — they all share one format) as
-// "[🐭 REMY]: {emoji} {problem} → {solution}" (the caller — tipLine() in
-// cli/src/ui.ts — adds the bracketed brand tag and, when the finding has a
-// quantified savings estimate, a trailing "→ +{est} 🪙" value clause). Write
-// `short` itself as "{problem} → {solution}" — no brand, no value clause,
-// no {est} placeholder. Placeholders come from finding evidence only. Keep
-// it ≤55 chars after substitution so the full composed line stays
-// statusline-sized. `live` is the same line for wide surfaces (the spinner
-// tip, via tipLineLong()): second person, the session's own numbers in it,
-// ≤110 chars rendered — every rule-backed tip needs one.
+//
+// EVERY rule-backed tip is three parts, in this order, and the shape is
+// enforced by catalog.test.ts rather than left to whoever writes the next one:
+//
+//   problem → action → earn
+//   │         │        └─ NEVER authored here. tipLineLong() derives it from
+//   │         │           the finding's estimate and the session's own measured
+//   │         │           cost, or falls back to `worth`.
+//   │         └─ what to do next: a command, a key chord, an imperative.
+//   └─ what went wrong, in evidence the developer RECOGNIZES — a filename
+//      where one can be resolved, otherwise a tool name, a denominator, a
+//      peak, a duration.
+//
+// This replaced a single free-form `live` string, which is how the deck ended
+// up reading "you edited one file 14×" (the rule knew the file and dropped it),
+// "1 files … one of them 4×" (a count and a plural noun in one sentence),
+// "1333 min" (22 hours), and "+219M 🪙" (raw cache-read tokens billed as if
+// they were fresh input). Nothing checked any of it, so all four shipped.
+//
+// Rules for writing them:
+//   - `problem` is second person, carries at least one {placeholder}, and
+//     renders at least one digit. Never a bare count with no denominator.
+//   - `action` names the thing to do, not the thing to feel.
+//   - Neither half may contain a 🪙, a $, or the brand tag — the renderer owns
+//     the value clause and the tag.
+//   - Composed, the line stays ≤140 chars so it fits a Stop nudge and the
+//     spinner without wrapping.
+//   - Anything that could meet a 1 ("{n} files") is pre-composed in the rule
+//     as a clause, not assembled from a number and a noun here.
+//
+// `short` is the narrow form for the boxed session-start splash, still
+// ≤55 chars; `what`/`fix`/`cite` are the long forms for the /remy report.
 
 /** Product name shown with every tip. */
 export const BRAND = "🐭 REMY";
@@ -32,12 +53,18 @@ export interface TipDef {
   short: string;
   /** One sentence: what the coach saw, numbers included. Plain words. */
   what: string;
-  /** The wide-surface form of `short`: same problem → solution shape, but
-   * spoken to the player with the session's own evidence in it ("you edited
-   * one file 14× this session — …"). Used where the line has room (the
-   * spinner tip), ≤110 chars rendered. Wisdom tips have no session evidence
-   * to cite, so they fall back to `short`. */
-  live?: string;
+  /** [1 of 3] What went wrong, in evidence the developer recognizes. Second
+   * person, ≥1 {placeholder}, renders ≥1 digit. Wisdom tips have no session
+   * evidence to cite, so they omit it and fall back to `short`. */
+  problem?: string;
+  /** [2 of 3] What to do about it: a command, a key chord, an imperative. */
+  action?: string;
+  /** [3 of 3], and only when there is no honest number. Most tips leave this
+   * unset and let the renderer derive money from the finding's estimate;
+   * `no-verify` and `subagent-offload` set it because what they buy is not
+   * tokens, and inventing a token figure to fill the slot is exactly the
+   * habit that made the old numbers untrustworthy. */
+  worth?: string;
   /** One or two imperative sentences: exactly what to do next time. */
   fix: string;
   /** Default values for placeholders a tip row might not carry.
@@ -67,7 +94,13 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🧹",
     title: "Auto-compact hit mid-task",
     short: "Auto-compact fired mid-task → /compact at breakpoints",
-    live: "auto-compact fired {count}× mid-task — run /compact at your next milestone instead of hitting the wall",
+    problem: "auto-compact fired {count}× mid-task, with the window {peak_pct}% full",
+    // No window size in the copy: it would need a fallback for rows written
+    // before it was recorded, and there is no honest one — 200k and 1M are
+    // both common. The peak needs no such excuse, because auto-compact only
+    // fires when the window is full.
+    action: "run /compact at your next milestone instead",
+    fallbacks: { peak_pct: "100" },
     what: "Auto-compact fired {count}× mid-task — Claude summarized at the worst moment, with the window already full.",
     fix: "Run /compact yourself at a natural breakpoint (after a milestone, before a new task). Scoping tasks smaller avoids the overflow entirely.",
     cite: {
@@ -82,7 +115,10 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🧠",
     title: "Big task, no plan",
     short: "Long build, no plan mode → plan first (Shift+Tab ×2)",
-    live: "{edits} edits across {tool_calls} tool calls, no plan — Shift+Tab ×2 first next time, fewer wrong turns",
+    problem:
+      "{edits} edits across {tool_calls} tool calls ({top_tool_n} of them {top_tool}) with no plan",
+    action: "Shift+Tab ×2 before the next big one",
+    fallbacks: { top_tool_n: "most", top_tool: "tool calls" },
     what: "{edits}+ edits across {tool_calls} tool calls — and plan mode was never used.",
     fix: "Before a big task, press Shift+Tab twice: Claude explores first, you approve the plan, then it builds. Fewer wrong turns.",
     cite: {
@@ -98,7 +134,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🔁",
     title: "Retry loop detected",
     short: "{tool} failed {run}× in a row → stop, add missing context",
-    live: "the same {tool} call failed {run}× in a row — stop after two and paste what it was missing",
+    problem: "{tool} failed {run}× in a row on {file}",
+    action: "stop after two: Esc, then paste the error it kept hitting",
+    fallbacks: { file: "the same target" },
     what: "The same {tool} call failed {run}× in a row — a retry loop.",
     fix: "After two identical failures, stop the loop: press Esc, paste the missing context (error output, file state, constraint), or change approach.",
     cite: {
@@ -113,7 +151,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "📚",
     title: "Re-reading the same files",
     short: "Same file read {worst}× → pin the facts in CLAUDE.md",
-    live: "{files} files got read again and again, one of them {worst}× — pin those facts in CLAUDE.md",
+    problem: "{file} got read {worst}× this session — {more}",
+    action: "pin what it keeps re-deriving in CLAUDE.md",
+    fallbacks: { file: "one file", more: "nothing new any of those times" },
     what: "{files} file(s) were read again and again (worst one: {worst}×).",
     // Deliberately NOT "facts Claude keeps re-deriving belong in CLAUDE.md",
     // which is what this said until the host shipped `/doctor`: its trim cuts
@@ -129,7 +169,13 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🔨",
     title: "Edit ping-pong on one file",
     short: "Same file edited {edits}×, 2+ misses → /clear + re-brief",
-    live: "you edited one file {edits}× this session, re-reading between tries — /clear and re-brief beats another go",
+    problem: "{file} took {edits} edits with {rereads} re-reads between them",
+    // "rather than attempt {next}" works both ways — "rather than attempt 15"
+    // when the count is known, "rather than attempt another" on a row written
+    // before it was recorded. "before attempt {next}" did not: it degraded to
+    // "before attempt the next one".
+    action: "/clear and re-brief rather than attempt {next}",
+    fallbacks: { file: "one file", rereads: "several", next: "another" },
     what: "One file took {edits} edit attempts, with re-reads between tries — every retry paid for all the failed ones before it.",
     fix: "After 2 failed fixes on the same spot: /clear, then re-brief with what you learned (the missing constraint, the error that kept coming back).",
     cite: {
@@ -144,7 +190,15 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🧪",
     title: "Edits shipped unverified",
     short: "{edits} edits shipped, 0 verify runs → end with tests/build",
-    live: "{edits} edits shipped and not one test, build or lint run — end with a verify pass",
+    // "{shell}, {bash_mix}" said the same thing twice ("20 shell runs, 15
+    // other, 5 file reads"). The parenthetical carries the detail.
+    problem: "{edits} edits across {scope}; of {shell} ({bash_mix}), not one was a test or build",
+    action: "end with a check it can run",
+    // The one thing this tip is NOT worth is tokens. It used to claim a flat
+    // 10,000 of savings; skipping a verify pass does not spend tokens, it
+    // ships bugs, and saying so is more persuasive than a fabricated figure.
+    worth: "fewer bugs, not fewer tokens",
+    fallbacks: { scope: "several files", shell: "some shell runs", bash_mix: "none of them a check" },
     what: "{edits} edits shipped — and not one test, build, or lint run to check them.",
     fix: "End with a verify pass: give Claude a check it can run (tests, build, typecheck) and ask it to iterate until green.",
     cite: {
@@ -160,7 +214,8 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🎒",
     title: "Heavy pack before turn one",
     short: "{pct}% context used before turn 1 → audit MCP + CLAUDE.md",
-    live: "{pct}% of your window was gone before turn one — audit MCP servers and prune CLAUDE.md",
+    problem: "{pct}% of the window was gone before turn one — {first_ctx} of skills, MCP and CLAUDE.md, every session",
+    action: "run /doctor to find what you are not using",
     what: "{pct}% of the window was full before any work happened ({first_tokens} tokens) — a tax you pay again every session.",
     // The attribution is appended, never substituted: `claude-md-prune` yields
     // to this tip precisely because this sentence already says "prune
@@ -181,7 +236,7 @@ export const TIPS: Record<string, TipDef> = {
     // "skill descriptions", not "plugin skills": the measurement sums plugin,
     // personal (~/.claude) and project skills, so naming plugins as the cause
     // would assert something the probe never established.
-    fallbacks: { skill_k: "the other part" },
+    fallbacks: { skill_k: "the other part", first_ctx: "most of it" },
   },
   "read-in-slices": {
     id: "read-in-slices",
@@ -189,7 +244,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "📖",
     title: "Whole files where a slice would do",
     short: "{count} whole files read → ask for the slice you need",
-    live: "{count} reads pulled whole files into context (worst ~{worst_k}k) — name the function or a line range",
+    problem: "{count} reads pulled whole files in — the biggest, {file}, was ~{worst_k}k",
+    action: "ask for a line range or a symbol name, and grep first",
+    fallbacks: { file: "one of them" },
     what: "{count} Read results landed whole files in the window, the largest ~{worst_k}k tokens — the window carries them for every turn after.",
     fix: "Ask for the part you need: a symbol name, or Read with offset/limit. Grep first when you're hunting — it returns matches, not files.",
     cite: {
@@ -204,7 +261,13 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🔀",
     title: "Exploration bloated main context",
     short: "{reads} files read inline → offload search to a subagent",
-    live: "{reads} files read straight into main context (peak {ctx_pct}%) — next hunt, ask for a subagent",
+    problem: "{reads} files read into main context, peaking at {ctx_pct}% — no subagent used",
+    action: 'next hunt, say "use a subagent to investigate …"',
+    // Delegating COSTS more tokens than doing the work inline (the rule's own
+    // comment measures it). What it buys is room in the main window, so that
+    // is what the slot says rather than a savings figure it would have to
+    // invent to compete.
+    worth: "room in your window, not fewer tokens",
     what: "{reads} files were read into the main context (peak {ctx_pct}%) — exploration bloated the window.",
     fix: 'Next codebase hunt, say: "use a subagent to investigate …" — it reads in its own window and reports back just the summary.',
     cite: {
@@ -219,7 +282,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🐚",
     title: "Shell reads where tools exist",
     short: "{count}× cat/grep in Bash → let it use Read + Grep",
-    live: "{count} reads went through the shell — ask for Read/Grep/Glob and stop dumping whole files in",
+    problem: "{count} of {bash_total} Bash calls were file reads, against {tool_reads} real Read/Grep calls",
+    action: "ask for Read/Grep/Glob by name, and pin it in CLAUDE.md",
+    fallbacks: { bash_total: "your", tool_reads: "few" },
     what: "{count} reads and searches went through the shell (cat, grep, find) — that output lands in the context whole: no pagination, no truncation, no cap.",
     fix: 'Ask for the built-in tools by name: "use Read/Grep/Glob instead of shell commands". Pin it in CLAUDE.md once and every session starts that way.',
   },
@@ -229,7 +294,11 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🎛",
     title: "Big model, small jobs",
     short: "{n} light sessions on {tier} → try Sonnet for quick tasks",
-    live: "{n} light sessions on {tier} this week — /model sonnet handles the quick ones",
+    problem: "{n} of {total} sessions this week ran {model} for a handful of tool calls",
+    action: "/model sonnet for the quick ones",
+    // `tier` was the literal string "opus" — a word nobody types. Rows written
+    // before the real id was kept fall back to it rather than to nothing.
+    fallbacks: { model: "the top-tier model", total: "your" },
     what: "{n} sessions this week ran the {tier}-tier model for light work — a few tool calls, small output.",
     fix: "/model sonnet for quick tasks stretches the same budget further; switch back up when the task actually needs the big model.",
     cite: {
@@ -261,7 +330,12 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🎯",
     title: "Rode the red zone",
     short: "{turns} turns above 80% context → /compact at 60%",
-    live: "{turns} replies ran above 80% context — /compact at 60%, not at the wall",
+    problem: "{turns} of {total_turns} replies ran ≥80% full, peaking at {peak_pct}%",
+    action: "/compact at your next milestone, near 60%",
+    // "80+" is not a guess dressed as a measurement: the rule only counts turns
+    // at or above 80%, so a row that predates the peak being recorded still
+    // truthfully peaked at 80-something.
+    fallbacks: { total_turns: "your", peak_pct: "80+" },
     what: "{turns} replies ran with the context ≥80% full — each one dragged the whole window through the model again, right where accuracy sags (context rot).",
     fix: "Work in the 40–60% band: /compact early and on purpose at a natural breakpoint, and distill progress into small notes instead of letting raw output pile up.",
     cite: {
@@ -292,7 +366,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "📄",
     title: "No CLAUDE.md to read from",
     short: "Re-reading the same files → write a CLAUDE.md",
-    live: "you re-read one file {worst}× with no CLAUDE.md — write the facts down once and stop re-deriving them",
+    problem: "{file} got read {worst}× and this project has no CLAUDE.md",
+    action: "run /init, or write the handful of facts by hand",
+    fallbacks: { file: "one file" },
     what: "You re-read {files} file(s) over and over — up to {worst}× — and this project has no CLAUDE.md, so every session rediscovers the same things from scratch.",
     fix: "Run /init, or write a short CLAUDE.md by hand: the handful of facts you keep re-explaining. It loads once per session instead of being re-read all day.",
     cite: {
@@ -307,7 +383,9 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "✂️",
     title: "Prune CLAUDE.md ruthlessly",
     short: "CLAUDE.md is {kb}KB → cut what can't cause a mistake",
-    live: "your CLAUDE.md is {kb}KB and every session pays for all of it — cut any line whose absence causes no mistake",
+    problem: "CLAUDE.md is {kb}KB — about {md_tokens} on every session, before you type",
+    action: "run /doctor, then cut any line whose absence causes no mistake",
+    fallbacks: { md_tokens: "several thousand tokens" },
     what: "CLAUDE.md is {kb}KB and loads on every single session — at that size it competes with your actual task for attention.",
     // /doctor leads because it knows what Claude can derive from THIS codebase
     // and we do not, and because adapt.ts slices this line at 220 chars — only
@@ -390,7 +468,14 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🫗",
     title: "A fat session left open",
     short: "Came back cold {count}× → wrap up before stepping away",
-    live: "you left this session idle {mins} min — coming back re-wrote the whole context at full price",
+    // "{gap}", not "{mins} min": the worst real gap on this machine was 1333,
+    // and "1333 min" is 22 hours nobody converts in their head.
+    problem: "left idle {gap} — the return re-wrote {ctx} at full price",
+    action: "land the milestone and close the session before you step away",
+    // Both fallbacks are words, not placeholders and not numbers glued to a
+    // unit suffix: renderTemplate is a single pass, so "{mins} minutes" would
+    // render literally, and "~{ctx_k}k" would read "~a full window'sk".
+    fallbacks: { gap: "a long stretch", ctx: "the whole context" },
     what: "{count}× this session sat idle (longest {mins} min) until the cache expired — coming back re-wrote a 100k+ context at full price each time.",
     fix: "Stepping away for a while? Land the milestone and wrap the session first — a fresh session with a one-line brief beats reheating a fat one. Quick break? Carry on, the cache holds.",
     cite: {

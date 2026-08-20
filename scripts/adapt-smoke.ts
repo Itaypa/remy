@@ -44,8 +44,8 @@ function seedToxicProfile(db: ReturnType<typeof openDb>): void {
     db,
     "smoke-0",
     [
-      { tipId: "no-verify", evidence: { edits: 9, bash_calls: 4 }, estSavingsTokens: 10_000 },
-      { tipId: "context-band", evidence: { turns: 6 }, estSavingsTokens: 90_000 },
+      { tipId: "no-verify", evidence: { edits: 9, bash_calls: 4 }, estSavingsTokens: 10_000, estClass: "input" },
+      { tipId: "context-band", evidence: { turns: 6 }, estSavingsTokens: 90_000, estClass: "cache-read" },
     ],
     new Date(now).toISOString(),
   );

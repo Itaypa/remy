@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { TIPS } from "@ccpp/core";
 import { CHAOS, SCENARIOS } from "../../../core/test/support/scenarios";
 import {
   activeTipId,
@@ -9,6 +10,7 @@ import {
   makeWorld,
   privacyLeaks,
   remy,
+  session,
   stripAnsi,
   systemMessage,
   tips,
@@ -71,8 +73,14 @@ describe("the surfaces a coached developer actually sees", () => {
     const { stop } = await driveSession(w, thrash);
     const active = tips(w).find((t) => t.status === "active")!;
 
-    const { tipLine } = await import("../../src/ui");
-    expect(systemMessage(stop)).toBe(tipLine(active as never));
+    // tipLineLong, not tipLine: the nudge is a full-width transient message,
+    // so it gets the three-part line (evidence → action → earn) rather than
+    // the 55-char form the boxed splash needs.
+    const { tipLineLong } = await import("../../src/ui");
+    expect(systemMessage(stop)).toBe(tipLineLong(active as never, session(w) as never));
+    // And it is the whole shape, not just a paraphrase of the title.
+    expect(systemMessage(stop)).toContain("took 6 edits with 3 re-reads between them");
+    expect(systemMessage(stop)).toContain("→ /clear and re-brief rather than attempt 7");
   });
 
   test("an overflowing context outranks the coaching tip", async () => {
@@ -83,10 +91,23 @@ describe("the surfaces a coached developer actually sees", () => {
     const message = systemMessage(stop);
 
     expect(message).toContain("83%");
+    // Whatever is queued, the alarm is the only thing said this turn — the
+    // developer must not get a habit tip stapled to an overflow warning.
+    expect(message ?? "").not.toContain(TIPS["context-band"]!.action!);
+    expect(message ?? "").not.toContain("/clear and re-brief");
+  });
+
+  test("a context tip never arrives as a second nag while the window is overflowing", async () => {
+    // The Stop-hook suppression is keyed on tip id, so the active tip has to BE
+    // a context tip for this to test anything. CHAOS now promotes `edit-thrash`
+    // — 15k of fresh input outranks context-band's 136k of cache-read context
+    // once each is priced — so snooze it and put context-band in the slot.
+    const { transcriptPath } = await driveSession(w, CHAOS);
+    await remy(w, ["dismiss", "edit-thrash"]);
     expect(activeTipId(w)).toBe("context-band");
-    // ...and the context tip does not then arrive as a second nag about the
-    // same problem.
-    expect(message).not.toContain("/compact at 60%");
+
+    const second = await hook(w, "Stop", { transcript_path: transcriptPath });
+    expect(systemMessage(second) ?? "").not.toContain(TIPS["context-band"]!.action!);
   });
 
   test("the session report lists every finding, with the active one on top", async () => {

@@ -1,9 +1,45 @@
 import type { ToolCall } from "./transcript";
 import type { SessionRow } from "./store";
+import { ModelStr, ToolNameStr } from "./schema";
 
 // Waste signatures. Deterministic — no model calls in the analysis path.
 // Savings estimates are deliberately rough heuristics; every rendered number
 // is prefixed with "~" by the UI layer.
+
+/** What a finding's tokens actually cost, as a multiple of the base input
+ * price — the thing that turns a raw count into money.
+ *
+ * This exists because a bare token number is not comparable across tips and
+ * was therefore misleading in both directions. Measured on real local data,
+ * **99% of a session's tokens are cache reads**, billed at a tenth; so
+ * `context-band` reporting 28.7M "recoverable" tokens was overstating its
+ * dollar value by roughly 10× while `edit-thrash` — the tip that can name a
+ * file and an action — reported 55k and lost the queue. Since `promoteNext`
+ * ranks by this number, the unit error decided which tip a developer saw.
+ *
+ * Only two classes are claimed on measurement; everything else is `input`,
+ * the neutral middle, because those estimates are per-event heuristics and
+ * pretending to know their price class would be a second invented number. */
+export type EstClass =
+  /** 0.1× — context dragged through the window again, never re-sent fresh. */
+  | "cache-read"
+  /** 1× — fresh tokens that need not have entered the window at all. */
+  | "input"
+  /** 1.9× — re-written at the 2× cold-cache price where a warm read cost 0.1×. */
+  | "cold-write";
+
+export const EST_WEIGHT: Record<EstClass, number> = {
+  "cache-read": 0.1,
+  input: 1,
+  "cold-write": 1.9,
+};
+
+/** Base-input-equivalent tokens: the estimate priced by its class. This is the
+ * only figure that may be compared between tips, ranked, or turned into money. */
+export function effectiveTokens(estTokens: number, estClass: EstClass): number {
+  if (!Number.isFinite(estTokens) || estTokens <= 0) return 0;
+  return Math.round(estTokens * (EST_WEIGHT[estClass] ?? 1));
+}
 
 export interface SessionSnapshot {
   sessionId: string;
@@ -25,6 +61,12 @@ export interface SessionSnapshot {
    * healthy 60% band across them (computed in transcript.ts). */
   redZoneTurns: number;
   redZoneExcessTokens: number;
+  /** Every main-chain assistant turn — the denominator that makes redZoneTurns
+   * mean something ("95 of 210" reads very differently from "95"). */
+  assistantTurns?: number;
+  /** Highest context any turn reached, as a percentage. `contextPct` is the
+   * size at the end; this is the peak, which is what the developer saw. */
+  maxContextPct?: number;
   /** Bytes of CLAUDE.md memory the host loads for this cwd (claudemd.ts).
    * null = never probed — the rules stay silent rather than guess. */
   claudeMdBytes: number | null;
@@ -34,6 +76,8 @@ export interface SessionSnapshot {
   fatReadTokens?: number;
   fatReadWorstTokens?: number;
   fatReadTargets?: string[];
+  /** Hashed target of the biggest one, so `read-in-slices` can name the file. */
+  fatReadWorstTarget?: string | null;
   /** Bytes of skill frontmatter the host loads before turn one (skills.ts).
    * null = never probed. Attribution only: no rule fires on this, it only
    * changes what `context-tax` says — which is why it's optional where
@@ -46,6 +90,15 @@ export interface Finding {
   tipId: string;
   evidence: Record<string, string | number>;
   estSavingsTokens: number;
+  /** Price class of `estSavingsTokens`. Required, so a new rule cannot quietly
+   * inherit a class it never thought about. */
+  estClass: EstClass;
+}
+
+/** Findings are ordered — and therefore promoted to the one active-tip slot —
+ * by what they are worth, not by how many raw tokens they name. */
+export function findingValue(f: Finding): number {
+  return effectiveTokens(f.estSavingsTokens, f.estClass);
 }
 
 const LONG_SESSION_TOOL_CALLS = 25;
@@ -58,7 +111,6 @@ const EDIT_THRASH_MIN_EDITS = 6;
 const EDIT_THRASH_MIN_CYCLES = 3;
 const EDIT_THRASH_EST_TOKENS_PER_EDIT = 5_000;
 const NO_VERIFY_MIN_EDITS = 4;
-const NO_VERIFY_EST_TOKENS = 10_000;
 const CONTEXT_TAX_MIN_TOKENS = 45_000;
 /** Below this the skill pack rounds to "0.0k tokens", which reads as a
  * measurement error rather than a small number — say it in words instead. */
@@ -98,6 +150,105 @@ const BYTES_PER_TOKEN = 4;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const VERIFY_CLASSES = new Set(["test", "build", "lint"]);
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
+/** The built-in tools that read a file properly, for `tools-over-bash`'s contrast. */
+const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
+
+// --- Evidence helpers -------------------------------------------------------
+//
+// Everything below produces a value a rule puts in `Finding.evidence`, which is
+// JSON-stringified straight into the `tips` table without passing through the
+// zod whitelist. Values built from OUR OWN counts are safe by construction;
+// the two that come from outside — a tool name off the transcript and a model
+// id off the host — are gated here with the same schemas the store uses.
+
+/** A tool name is transcript-derived (`block.name`), so it is the one evidence
+ * string an exotic MCP server could steer. Gate it rather than trust it. */
+function safeToolName(name: string): string {
+  return ToolNameStr.safeParse(name).data ?? "the same tool";
+}
+
+/** `claude-opus-5[1m]` → `opus-5[1m]`. Gated first for the same reason. */
+function safeShortModel(id: string | null | undefined): string {
+  const ok = ModelStr.safeParse(id ?? "").data;
+  return ok ? ok.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "the top-tier model";
+}
+
+/** A token count with its unit attached, so a template never concatenates a
+ * suffix onto something that may have fallen back to a word. */
+function kTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "the whole context";
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1000))}k`;
+}
+
+/** "1333 min" is 22 hours, and nobody converts that in their head. Minutes
+ * below an hour stay minutes; past that it reads in hours. */
+export function humanGap(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "a moment";
+  if (minutes < 90) return `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  return hours < 10 ? `${hours.toFixed(1)}h` : `${Math.round(hours)}h`;
+}
+
+/** A count with a noun that agrees with it. Every "{n} files" in a template is
+ * a latent "1 files" — the copy cannot know the number, so the rule composes
+ * the phrase and the template just places it. */
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? `one ${one}` : `${n} ${many}`;
+}
+
+/** Plural-safe by construction: the caller names the worst offender, and this
+ * says what — if anything — was behind it. The old copy read "1 files … one of
+ * them 4×", which is the sort of thing that makes a coach look broken. */
+function othersClause(files: number, tail: string): string {
+  if (files <= 1) return "nothing new any of those times";
+  return `and ${plural(files - 1, "other file", "other files")} ${tail}`;
+}
+
+/** "9 git, 4 file reads" — what the shell was actually doing. `no-verify`
+ * already inspects every Bash class to prove none is a test; this reports the
+ * proof instead of discarding it. */
+/** Singular and plural, because "1 file reads" is the same defect as "1 files". */
+const BASH_CLASS_LABEL: Record<string, [string, string]> = {
+  git: ["git call", "git"],
+  pkg: ["package call", "package"],
+  run: ["run", "runs"],
+  "read-cmd": ["file read", "file reads"],
+  test: ["test", "tests"],
+  build: ["build", "builds"],
+  lint: ["lint", "lints"],
+  other: ["other", "other"],
+};
+
+function bashMix(calls: ToolCall[], top = 2): string {
+  const counts = new Map<string, number>();
+  for (const c of calls) {
+    if (c.name !== "Bash") continue;
+    const key = c.bashClass ?? "other";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  // "15 other" names nothing the developer can picture, and on real sessions it
+  // is usually the largest bucket — so it would crowd out the classes that do
+  // mean something. Kept only when it is all there is.
+  const named = [...counts.entries()].filter(([k]) => k !== "other");
+  const parts = (named.length > 0 ? named : [...counts.entries()])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, top)
+    .map(([key, n]) => {
+      const [one, many] = BASH_CLASS_LABEL[key] ?? BASH_CLASS_LABEL.other!;
+      return `${n} ${n === 1 ? one : many}`;
+    });
+  return parts.length > 0 ? parts.join(", ") : "no shell calls";
+}
+
+/** The tool the session leaned on hardest — a recognizable anchor for rules
+ * that otherwise only have totals to report. */
+function topTool(calls: ToolCall[]): { name: string; n: number } {
+  const counts = new Map<string, number>();
+  for (const c of calls) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  let best = { name: "", n: 0 };
+  for (const [name, n] of counts) if (n > best.n) best = { name, n };
+  return { name: safeToolName(best.name || "tool"), n: best.n };
+}
 
 export function analyzeSession(s: SessionSnapshot): Finding[] {
   const findings: Finding[] = [];
@@ -105,8 +256,13 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
   if (s.autoCompacts > 0) {
     findings.push({
       tipId: "auto-compact",
-      evidence: { count: s.autoCompacts },
+      evidence: {
+        count: s.autoCompacts,
+        peak_pct: s.maxContextPct ?? s.contextPct,
+        window_k: Math.round(s.contextLimit / 1000),
+      },
       estSavingsTokens: s.autoCompacts * Math.round(s.contextLimit * 0.3),
+      estClass: "input",
     });
   }
 
@@ -115,10 +271,17 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
     s.toolCalls.length >= LONG_SESSION_TOOL_CALLS &&
     s.editCalls >= LONG_SESSION_EDITS
   ) {
+    const top = topTool(s.toolCalls);
     findings.push({
       tipId: "plan-mode",
-      evidence: { tool_calls: s.toolCalls.length, edits: s.editCalls },
+      evidence: {
+        tool_calls: s.toolCalls.length,
+        edits: s.editCalls,
+        top_tool: top.name,
+        top_tool_n: top.n,
+      },
       estSavingsTokens: Math.max(10_000, Math.round(s.spendTokens * 0.15)),
+      estClass: "input",
     });
   }
 
@@ -157,7 +320,8 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
 
   applyClaudeMd(s, findings);
 
-  return findings.sort((a, b) => b.estSavingsTokens - a.estSavingsTokens);
+  // By worth, not by raw token count — see EstClass.
+  return findings.sort((a, b) => findingValue(b) - findingValue(a));
 }
 
 // CLAUDE.md, in both directions — it runs last because both halves are about
@@ -185,6 +349,7 @@ function applyClaudeMd(s: SessionSnapshot, findings: Finding[]): void {
       tipId: "claude-md-missing",
       evidence: reread!.evidence,
       estSavingsTokens: reread!.estSavingsTokens,
+      estClass: reread!.estClass,
     });
     return;
   }
@@ -193,8 +358,12 @@ function applyClaudeMd(s: SessionSnapshot, findings: Finding[]): void {
   if (findings.some((f) => f.tipId === "context-tax")) return;
   findings.push({
     tipId: "claude-md-prune",
-    evidence: { kb: Math.round(bytes / 1000) },
+    evidence: {
+      kb: Math.round(bytes / 1000),
+      md_tokens: kTokens(bytes / BYTES_PER_TOKEN),
+    },
     estSavingsTokens: Math.round((bytes - CLAUDE_MD_TARGET_BYTES) / BYTES_PER_TOKEN),
+    estClass: "input",
   });
 }
 
@@ -207,10 +376,16 @@ function applyClaudeMd(s: SessionSnapshot, findings: Finding[]): void {
 function detectShellReads(s: SessionSnapshot): Finding | null {
   const shellReads = s.toolCalls.filter((c) => c.name === "Bash" && c.bashClass === "read-cmd").length;
   if (shellReads < BASH_READ_MIN) return null;
+  // The denominators are what make this recognizable: "58 reads went through
+  // the shell" is a number about nothing, "58 of your 420 Bash calls, against
+  // 132 real Read/Grep calls" is a habit the developer can picture.
+  const bashTotal = s.toolCalls.filter((c) => c.name === "Bash").length;
+  const toolReads = s.toolCalls.filter((c) => READ_TOOLS.has(c.name)).length;
   return {
     tipId: "tools-over-bash",
-    evidence: { count: shellReads },
+    evidence: { count: shellReads, bash_total: bashTotal, tool_reads: toolReads },
     estSavingsTokens: (shellReads - BASH_READ_FREE) * BASH_READ_EST_TOKENS,
+    estClass: "input",
   };
 }
 
@@ -227,8 +402,19 @@ function detectRedZoneRiding(s: SessionSnapshot): Finding | null {
   if (s.redZoneTurns < RED_ZONE_MIN_TURNS) return null;
   return {
     tipId: "context-band",
-    evidence: { turns: s.redZoneTurns },
+    evidence: {
+      turns: s.redZoneTurns,
+      // Denominator and peak. Without them "95 replies" is unanswerable —
+      // 95 out of how many, and how bad did it actually get?
+      total_turns: Math.max(s.assistantTurns ?? 0, s.redZoneTurns),
+      peak_pct: s.maxContextPct ?? s.contextPct,
+    },
     estSavingsTokens: s.redZoneExcessTokens,
+    // Measured, not assumed: redZoneExcessTokens is a sum of per-turn CONTEXT
+    // sizes, and a context that is already in the window is re-sent as a cache
+    // read at a tenth of the input price. Billing it at 1× is what produced the
+    // "+219M 🪙" headline — a real measurement in a unit that made it a lie.
+    estClass: "cache-read",
   };
 }
 
@@ -242,8 +428,20 @@ function detectCacheExpiry(s: SessionSnapshot): Finding | null {
   if (s.cacheExpiries === 0) return null;
   return {
     tipId: "cache-idle",
-    evidence: { count: s.cacheExpiries, mins: s.cacheExpiryWorstGapMinutes },
-    estSavingsTokens: Math.round(s.cacheExpiryTokens * 0.9),
+    evidence: {
+      count: s.cacheExpiries,
+      mins: s.cacheExpiryWorstGapMinutes,
+      gap: humanGap(s.cacheExpiryWorstGapMinutes),
+      // Pre-formatted with its unit so the template never has to glue "k" onto
+      // a value that might have fallen back to a word.
+      ctx: kTokens(s.cacheExpiryTokens / Math.max(1, s.cacheExpiries)),
+    },
+    // The raw re-written count. The 0.9 that used to sit here was the
+    // difference between the cold and warm price expressed as a fudge on the
+    // token count; that belongs in the price class, where it can be stated
+    // once and applied consistently.
+    estSavingsTokens: s.cacheExpiryTokens,
+    estClass: "cold-write",
   };
 }
 
@@ -265,17 +463,31 @@ function detectEditThrash(calls: ToolCall[]): Finding | null {
   }
   let files = 0;
   let worstEdits = 0;
+  // The hash of the worst offender and its re-read count were both computed
+  // here and then discarded, which is why this tip could only ever say "one
+  // file". They are the whole story: a name and the rework cycle around it.
+  let worstHash: string | null = null;
   for (const [hash, count] of edits) {
     if (count < EDIT_THRASH_MIN_EDITS) continue;
     if ((rereads.get(hash) ?? 0) < EDIT_THRASH_MIN_CYCLES) continue;
     files += 1;
-    worstEdits = Math.max(worstEdits, count);
+    if (count > worstEdits) {
+      worstEdits = count;
+      worstHash = hash;
+    }
   }
   if (files === 0) return null;
   return {
     tipId: "edit-thrash",
-    evidence: { files, edits: worstEdits },
+    evidence: {
+      files,
+      edits: worstEdits,
+      rereads: rereads.get(worstHash ?? "") ?? 0,
+      next: worstEdits + 1,
+      ...(worstHash ? { file_hash: worstHash } : {}),
+    },
     estSavingsTokens: (worstEdits - 3) * EDIT_THRASH_EST_TOKENS_PER_EDIT,
+    estClass: "input",
   };
 }
 
@@ -286,10 +498,31 @@ function detectNoVerify(s: SessionSnapshot): Finding | null {
   const bashCalls = s.toolCalls.filter((c) => c.name === "Bash");
   if (bashCalls.length === 0) return null;
   if (bashCalls.some((c) => c.bashClass && VERIFY_CLASSES.has(c.bashClass))) return null;
+  const editedFiles = new Set(
+    s.toolCalls.filter((c) => EDIT_TOOLS.has(c.name) && c.targetHash).map((c) => c.targetHash),
+  ).size;
   return {
     tipId: "no-verify",
-    evidence: { edits: s.editCalls, bash_calls: bashCalls.length },
-    estSavingsTokens: NO_VERIFY_EST_TOKENS,
+    evidence: {
+      edits: s.editCalls,
+      files: editedFiles,
+      bash_calls: bashCalls.length,
+      // Pre-composed: a session can legitimately edit one file and make one
+      // shell call, so "{files} files" and "{bash_calls} shell runs" are both
+      // a "1 files" waiting to happen.
+      scope: plural(editedFiles, "file", "files"),
+      shell: plural(bashCalls.length, "shell run", "shell runs"),
+      // The rule inspected every one of these classes to prove none is a test,
+      // build or lint. Reporting the proof is strictly more useful than
+      // reporting only the conclusion.
+      bash_mix: bashMix(bashCalls),
+    },
+    // Zero, deliberately. This was a flat 10,000 — a constant, identical for a
+    // 4-edit session and a 400-edit one, that no measurement produced. There is
+    // no honest token figure here because skipping a verify pass does not spend
+    // tokens, it ships bugs; the catalog's `worth` line says exactly that.
+    estSavingsTokens: 0,
+    estClass: "input",
   };
 }
 
@@ -315,6 +548,7 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
     evidence: {
       pct: Math.min(100, Math.round((s.firstContextTokens / s.contextLimit) * 100)),
       first_tokens: s.firstContextTokens,
+      first_ctx: kTokens(s.firstContextTokens),
       // Attribution, not a trigger: it changes what the tip SAYS, never
       // whether it fires or what it's worth. estSavingsTokens deliberately
       // stays the whole pack — it drives which tip goes active (tips.ts), so
@@ -324,6 +558,7 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
       ...(s.skillBytes == null ? {} : { skill_k: skillShare(s.skillBytes) }),
     },
     estSavingsTokens: s.firstContextTokens - CONTEXT_TAX_BASELINE_TOKENS,
+    estClass: "input",
   };
 }
 
@@ -358,12 +593,18 @@ function detectFatReads(s: SessionSnapshot): Finding | null {
   const worst = s.fatReadWorstTokens ?? 0;
   return {
     tipId: "read-in-slices",
-    evidence: { count, worst_k: Math.round(worst / 1_000) },
+    evidence: {
+      count,
+      worst_k: Math.round(worst / 1_000),
+      total_k: Math.round(total / 1_000),
+      ...(s.fatReadWorstTarget ? { file_hash: s.fatReadWorstTarget } : {}),
+    },
     // Only the excess over a bounded read, and only charged once: the window
     // re-reads it at cache price thereafter, so claiming the full amount every
     // turn would be the inflated-estimate mistake `subagent-offload` just had
     // corrected.
     estSavingsTokens: Math.max(0, Math.round((total - count * FAT_READ_TOKENS) * 0.9)),
+    estClass: "input",
   };
 }
 
@@ -378,7 +619,11 @@ function detectSubagentOffload(s: SessionSnapshot): Finding | null {
   if (s.contextPct < SUBAGENT_MIN_CONTEXT_PCT && s.autoCompacts === 0) return null;
   return {
     tipId: "subagent-offload",
-    evidence: { reads: distinctReads, ctx_pct: s.contextPct },
+    // The peak under the existing key rather than a new one: `contextPct` is
+    // the size at the END of the session, and the developer's memory is of the
+    // worst it got. Improving the value in place needs no fallback and no
+    // migration — every row already written carries this key.
+    evidence: { reads: distinctReads, ctx_pct: s.maxContextPct ?? s.contextPct },
     // No token estimate, on purpose. This used to claim
     // `(reads - 10) * 1500` tokens saved, which had the sign backwards on the
     // metered axis: delegating to a subagent COSTS more tokens than doing the
@@ -394,6 +639,7 @@ function detectSubagentOffload(s: SessionSnapshot): Finding | null {
     // measured headroom figure we have (redZoneExcessTokens) is already spent
     // by `context-band`, and reusing it would double-count the same tokens.
     estSavingsTokens: 0,
+    estClass: "input",
   };
 }
 
@@ -417,8 +663,18 @@ export function analyzeHabits(rows: SessionRow[]): Finding[] {
     const spend = trivial.reduce((sum, r) => sum + r.tokens_in + r.tokens_out, 0);
     findings.push({
       tipId: "model-fit",
-      evidence: { n: trivial.length, tier: "opus" },
+      evidence: {
+        n: trivial.length,
+        total: rows.length,
+        // The real id, not the literal "opus". The rows were matched on
+        // `.includes("opus")` and the actual model then thrown away, so the tip
+        // named a tier the developer never types instead of the model they
+        // picked. `tier` stays for rows written before this shipped.
+        model: safeShortModel(trivial[0]?.model),
+        tier: "opus",
+      },
       estSavingsTokens: Math.round(0.8 * spend),
+      estClass: "input",
     });
   }
   return findings;
@@ -436,6 +692,7 @@ function detectRetryRuns(calls: ToolCall[]): Finding | null {
   let runs = 0;
   let worstRun = 0;
   let worstTool = "";
+  let worstHash: string | null = null;
   let est = 0;
   let i = 0;
   while (i < calls.length) {
@@ -456,6 +713,9 @@ function detectRetryRuns(calls: ToolCall[]): Finding | null {
       if (len > worstRun) {
         worstRun = len;
         worstTool = c.name;
+        // A retry run is keyed on the same target, so the run HAS a file —
+        // it was matched on and then dropped.
+        worstHash = c.targetHash;
       }
     }
     i += len;
@@ -463,8 +723,14 @@ function detectRetryRuns(calls: ToolCall[]): Finding | null {
   if (runs === 0) return null;
   return {
     tipId: "retry-loop",
-    evidence: { runs, run: worstRun, tool: worstTool },
+    evidence: {
+      runs,
+      run: worstRun,
+      tool: safeToolName(worstTool),
+      ...(worstHash ? { file_hash: worstHash } : {}),
+    },
     estSavingsTokens: est,
+    estClass: "input",
   };
 }
 
@@ -476,17 +742,30 @@ function detectRereadChurn(calls: ToolCall[]): Finding | null {
   }
   let files = 0;
   let worst = 0;
+  let worstHash: string | null = null;
   let est = 0;
-  for (const count of readCounts.values()) {
+  for (const [hash, count] of readCounts) {
     if (count < REREAD_MIN) continue;
     files += 1;
-    worst = Math.max(worst, count);
+    if (count > worst) {
+      worst = count;
+      worstHash = hash;
+    }
     est += (count - 3) * REREAD_EST_TOKENS_PER_READ;
   }
   if (files === 0) return null;
   return {
     tipId: "reread-churn",
-    evidence: { files, worst },
+    evidence: {
+      files,
+      worst,
+      // Pre-composed rather than left to the template, which is how "1 files
+      // … one of them 4×" shipped: a count and a plural noun in the same
+      // sentence will eventually meet a 1.
+      more: othersClause(files, "went the same way"),
+      ...(worstHash ? { file_hash: worstHash } : {}),
+    },
     estSavingsTokens: est,
+    estClass: "input",
   };
 }

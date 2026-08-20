@@ -55,15 +55,23 @@ describe("the context alarm outranks and silences everything else", () => {
     w = makeWorld();
   });
 
-  test("an alarming session gets the alarm once, then silence", async () => {
+  test("an alarming session gets the alarm once, then the context tip stays out of the gap", async () => {
     const { stop, transcriptPath } = await driveSession(w, CHAOS);
     expect(systemMessage(stop)).toContain("83%");
+
+    // The suppression is keyed on tip id, so the active tip has to BE a context
+    // tip for it to mean anything. It is `edit-thrash` here — 15k of fresh
+    // input beats context-band's 136k of cache-read context once each is priced
+    // — so snooze it and let context-band take the slot. This used to hold by
+    // luck: context-band won that queue on the raw token count, and the moment
+    // ranking became honest the assertion was silently about another tip.
+    await remy(w, ["dismiss", "edit-thrash"]);
+    expect(activeTipId(w)).toBe("context-band");
 
     // Second turn: the alarm is throttled, and the context tip must not slip
     // into the gap — that would be a second nag about the same problem.
     const second = await hook(w, "Stop", { transcript_path: transcriptPath });
     expect(second.stdout).toBe("");
-    expect(activeTipId(w)).toBe("context-band");
   });
 
   test("with the alarm window elapsed it fires again, still without the tip", async () => {
@@ -85,19 +93,21 @@ describe("dismissing a tip", () => {
 
   test("snoozing promotes the next-best tip and never re-files the old one", async () => {
     const { transcriptPath } = await driveSession(w, CHAOS);
-    expect(activeTipId(w)).toBe("context-band");
+    // Priced rather than counted: edit-thrash's 15k of fresh input outranks
+    // context-band's 136k of context re-sent from cache at a tenth.
+    expect(activeTipId(w)).toBe("edit-thrash");
 
     const dismissed = await remy(w, ["dismiss"]);
     expect(dismissed.code).toBe(0);
-    expect(activeTipId(w)).toBe("edit-thrash");
+    expect(activeTipId(w)).toBe("context-band");
 
     // The same toxic session, analysed again: the snoozed tip stays snoozed
     // rather than coming straight back as a "new" finding.
     await hook(w, "Stop", { transcript_path: transcriptPath });
-    const contextBand = tips(w).filter((t) => t.tip_id === "context-band");
-    expect(contextBand.length).toBe(1);
-    expect(contextBand[0]!.status).toBe("dismissed");
-    expect(activeTipId(w)).toBe("edit-thrash");
+    const snoozed = tips(w).filter((t) => t.tip_id === "edit-thrash");
+    expect(snoozed.length).toBe(1);
+    expect(snoozed[0]!.status).toBe("dismissed");
+    expect(activeTipId(w)).toBe("context-band");
   });
 });
 

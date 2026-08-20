@@ -182,16 +182,24 @@ export interface TipRowLite {
   tip_id: string;
   status: string;
   est_savings_tokens: number;
+  est_class: string | null;
   session_id: string | null;
   why: string | null;
   evidence: string;
 }
 
 export function tips(w: World): TipRowLite[] {
+  // Ordered by WORTH, mirroring tips.ts — the raw count is not comparable
+  // across price classes, and a harness that ranked differently from
+  // production would quietly disagree with every assertion made through it.
   return read<TipRowLite>(
     w,
-    `SELECT tip_id, status, est_savings_tokens, session_id, why, evidence
-       FROM tips ORDER BY est_savings_tokens DESC, id ASC`,
+    `SELECT tip_id, status, est_savings_tokens, est_class, session_id, why, evidence
+       FROM tips
+      ORDER BY est_savings_tokens * (CASE est_class
+                 WHEN 'cache-read' THEN 0.1
+                 WHEN 'cold-write' THEN 1.9
+                 ELSE 1 END) DESC, id ASC`,
   );
 }
 

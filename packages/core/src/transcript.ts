@@ -56,6 +56,10 @@ export interface TranscriptStats {
   /** Hashed targets of those reads, so the rules engine can tell a whole-file
    * read apart from a file `reread-churn` is already billing. */
   fatReadTargets: string[];
+  /** Hashed target of the single biggest one — the file `read-in-slices` names.
+   * Tracked separately from `fatReadTargets` (a Set, so unordered) because the
+   * tip cites the worst offender by name and a set has no worst. */
+  fatReadWorstTarget: string | null;
   /** Reasoning-effort mix across main-chain turns, as counts only — never the
    * value itself, so no new enum reaches the storage whitelist. `effortTurns`
    * is every turn that declared one, so a gap between it and max+high is how
@@ -279,6 +283,7 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   let fatReads = 0;
   let fatReadTokens = 0;
   let fatReadWorstTokens = 0;
+  let fatReadWorstTarget: string | null = null;
   const fatReadTargetSet = new Set<string>();
   let effortTurns = 0;
   let effortMaxTurns = 0;
@@ -382,7 +387,10 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
           if (tokens >= FAT_READ_TOKENS) {
             fatReads += 1;
             fatReadTokens += tokens;
-            if (tokens > fatReadWorstTokens) fatReadWorstTokens = tokens;
+            if (tokens > fatReadWorstTokens) {
+              fatReadWorstTokens = tokens;
+              fatReadWorstTarget = call.targetHash;
+            }
             if (call.targetHash) fatReadTargetSet.add(call.targetHash);
           }
         }
@@ -508,6 +516,7 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     fatReads,
     fatReadTokens,
     fatReadWorstTokens,
+    fatReadWorstTarget,
     fatReadTargets: [...fatReadTargetSet],
     effortTurns,
     effortMaxTurns,

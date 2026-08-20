@@ -19,6 +19,28 @@ whole design language of the shipped product.
    mechanism ("caught 3 context overflows → ~600k tokens").
 2. **Deterministic honesty.** Exact values over vibes; estimates are flagged
    (`est.`, `~`). We never show a number we can't derive.
+
+   Two corollaries, both learned the hard way:
+
+   **A number needs a unit that means something.** Raw token counts are not
+   comparable between findings — measured locally, **99% of a session's tokens
+   are cache reads**, billed at a tenth of fresh input. So every estimate
+   carries a price class (`EstClass` in `core/src/rules.ts`) and is converted
+   to money against the session's *own* measured `cost_usd`. No price table:
+   one would go stale and would be wrong for a subscription account. When a
+   session carries no cost the line falls back to effective 🪙, and when a
+   finding has no derivable value at all it says what it *is* worth rather
+   than inventing a figure. This is not cosmetic — the queue ranks by this
+   number, so an inflated one decides which tip a developer sees.
+
+   **Evidence has to be recognizable to count as evidence.** "You edited one
+   file 14×" is unanswerable; `packages/cli/src/index.ts took 14 edits with 19
+   re-reads between them` is a thing the developer remembers doing. Filenames
+   are never stored — `schema.ts` forbids them — so they are recovered at
+   render time by re-hashing the working tree (`cli/src/resolve.ts`) and
+   dropped again immediately. A name only ever appears for someone who already
+   has that file on disk, which is what makes storing nothing an honest trade
+   rather than a technicality.
 3. **Density over decoration.** Structure encodes information; ornament that
    encodes nothing gets cut.
 4. **Speaks tech.** Terminal lineage, worn openly — ASCII, ANSI, emoji —
@@ -110,10 +132,26 @@ carries an exact number.
   in `core/src/catalog.ts` — currently "🐭 REMY") is the entire signal that a
   line is a coaching message — no separate persona voice, no other label
   needed. The two arrows are load-bearing: problem (what the coach saw, with
-  a number) → solution (the one imperative action) → value (`+{est} 🪙`,
-  omitted when there's nothing quantified — most wisdom tips). `TipDef.short`
-  holds only `"{problem} → {solution}"` — no brand, no value clause, no
-  `{est}` placeholder; `tipLine()` composes the rest: `[🐭 REMY]: 🔨 Same file
+  a number) → solution (the one imperative action) → value.
+
+  **The three parts are slots in the type, not a convention.** `TipDef.problem`
+  and `TipDef.action` are separate fields, `catalog.test.ts` enforces that every
+  rule-backed tip has both, that `problem` carries a placeholder and renders a
+  digit, and that neither half prices itself. They replaced a single free-form
+  string, under which the deck accumulated "you edited **one file** 14×" (the
+  rule knew the filename and dropped it), "**1 files** … one of them 4×",
+  "**1333 min**" for 22 hours, and "**+219M 🪙**" for tokens billed at a tenth.
+  Nothing checked any of it.
+
+  **The value clause is the renderer's, never the author's.** `earnClause()`
+  derives it from the finding's estimate, its price class, and the session's own
+  measured cost — so a tip cannot claim a number nothing measured. A finding
+  whose payoff genuinely isn't tokens sets `TipDef.worth` and says so
+  ("worth: fewer bugs, not fewer tokens") rather than inventing a figure.
+
+  `TipDef.short` holds only `"{problem} → {solution}"` — no brand, no value
+  clause, no `{est}` placeholder — and is the narrow form for the boxed splash;
+  `tipLine()` composes the rest: `[🐭 REMY]: 🔨 Same file
   edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`. An earlier version
   voiced the Stop-hook nudge with a separate fictional mascot ("Byte:")
   instead of the bracket, specifically to avoid misattributing advice to the
@@ -128,8 +166,11 @@ carries an exact number.
   exclusive per Stop (never both, so a turn ending never produces two
   systemMessages): an overflowing context takes priority as the more urgent
   problem.
-  - **Tip nudge** — `tipLine()`, same as everywhere else: `[🐭 REMY]: 🔨 Same
-    file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`. Throttled
+  - **Tip nudge** — `tipLineLong()`, the wide form: `[🐭 REMY]: 🔨
+    packages/cli/src/index.ts took 14 edits with 19 re-reads between them →
+    /clear and re-brief rather than attempt 15 → saves ≈$0.40`. A transient
+    `systemMessage` has the full terminal width, so there is no reason to
+    squeeze it into the 55-char form the boxed splash needs. Throttled
     (`dueForStopNudge()` in `core/src/tips.ts`, `STOP_NUDGE_THROTTLE_MS` =
     10 min, tracked in its own `tip_memory.last_stop_nudge_at` column,
     deliberately **not** sharing a column with the splash's
@@ -170,14 +211,15 @@ carries an exact number.
   rotates between deck entries on its own, so the line **moves to the next
   finding by itself between waits** — dismissing is for silencing a tip for
   30 days, not for advancing the queue.
-  **Wide-surface copy (`TipDef.live`, rendered by `tipLineLong()`).** Same
-  skeleton as everywhere else — `[Brand]: {emoji} problem → solution →
-  value` — but the problem clause is the long form, spoken to the player
-  with the session's own numbers: `[🐭 REMY]: 🔨 you edited one file 56× this
-  session, re-reading between tries → /clear and re-brief beats another go
-  → +265k 🪙`. Every rule-backed tip carries one (≤110 chars rendered,
-  enforced in `catalog.test.ts`, and it must contain a number from the
-  evidence — advice without the receipt is off-register). Wisdom tips have no
+  **Wide-surface copy (`TipDef.problem` + `TipDef.action`, rendered by
+  `tipLineLong()`).** Same skeleton as everywhere else — `[Brand]: {emoji}
+  problem → solution → value` — but the problem clause is the long form, spoken
+  to the player with the session's own evidence: `[🐭 REMY]: 🔨
+  packages/cli/src/index.ts took 14 edits with 19 re-reads between them →
+  /clear and re-brief rather than attempt 15 → saves ≈$0.40`. Every rule-backed
+  tip carries both halves (composed ≤140 chars, enforced in `catalog.test.ts`,
+  and `problem` must contain a number from the evidence — advice without the
+  receipt is off-register). Wisdom tips have no
   session evidence, so they fall back to `short`; the hint deck carries
   attributed quotes instead. That's the rule: **live evidence when we have
   it, a citation when we don't.**

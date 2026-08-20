@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { BRAND, HINTS, type SessionRow, type TipRow } from "@ccpp/core";
-import { bar, cacheField, contextAlarmLine, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { BRAND, HINTS, TIPS, type SessionRow, type TipRow } from "@ccpp/core";
+import { bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -11,9 +11,24 @@ function tipRow(overrides: Partial<TipRow>): TipRow {
     status: "active",
     evidence: null,
     est_savings_tokens: 0,
+    est_class: "input",
     why: null,
     ...overrides,
   } as TipRow;
+}
+
+/** A session whose own numbers price a finding: $10 across 1M effective
+ * tokens, so 1 effective token is worth exactly $0.00001 and the arithmetic
+ * in these tests is checkable by hand. */
+function pricedSession(over: Partial<SessionRow> = {}): SessionRow {
+  return {
+    cost_usd: 10,
+    tokens_in: 1_000_000,
+    tokens_out: 0,
+    cache_read: 0,
+    cache_write: 0,
+    ...over,
+  } as SessionRow;
 }
 
 describe("tipLine — [Brand]: emoji problem → solution → value", () => {
@@ -67,6 +82,127 @@ describe("tipLine — [Brand]: emoji problem → solution → value", () => {
   test("this is the ONE format used everywhere — statusline, splash, and the Stop-hook nudge all call tipLine()", () => {
     const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }), est_savings_tokens: 165_000 }));
     expect(line).toBe(`[${BRAND}]: 🔨 Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`);
+  });
+});
+
+describe("earnDollars — the session prices its own findings", () => {
+  test("converts an estimate using the session's measured cost, no price table", () => {
+    // A hardcoded per-token price would go stale and would be simply wrong for
+    // a subscription account. Two measured numbers and a division instead.
+    expect(earnDollars(100_000, "input", pricedSession())).toBeCloseTo(1.0, 5);
+  });
+
+  test("cache-read tokens are worth a tenth — the whole reason the class exists", () => {
+    // 28.7M raw cache-read tokens is what "+219M 🪙" was built from. Priced,
+    // the same finding is worth a tenth of what a raw count implies.
+    expect(earnDollars(100_000, "cache-read", pricedSession())).toBeCloseTo(0.1, 5);
+    expect(earnDollars(100_000, "cold-write", pricedSession())).toBeCloseTo(1.9, 5);
+  });
+
+  test("an unclassified legacy row is priced at the neutral 1x, never dropped", () => {
+    expect(earnDollars(100_000, null, pricedSession())).toBeCloseTo(1.0, 5);
+  });
+
+  test("the session's own mix is weighted the same way on both sides of the division", () => {
+    // 1M cache reads is 100k effective, so $10 over it makes one effective
+    // token worth $0.0001 — ten times the all-fresh session above.
+    const cacheHeavy = pricedSession({ tokens_in: 0, cache_read: 1_000_000 });
+    expect(earnDollars(100_000, "input", cacheHeavy)).toBeCloseTo(10.0, 5);
+  });
+
+  test("no measured cost means no dollar figure — we never show a number we can't derive", () => {
+    // Measured on real data: 9 of 13 local sessions carry no cost at all,
+    // because cost_usd only lands when the statusline runs.
+    expect(earnDollars(100_000, "input", pricedSession({ cost_usd: 0 }))).toBeNull();
+    expect(earnDollars(100_000, "input", pricedSession({ cost_usd: null as never }))).toBeNull();
+    expect(earnDollars(100_000, "input", null)).toBeNull();
+    expect(earnDollars(100_000, "input", undefined)).toBeNull();
+  });
+
+  test("a session with cost but no tokens divides by nothing, and says so", () => {
+    const empty = pricedSession({ tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0 });
+    expect(earnDollars(100_000, "input", empty)).toBeNull();
+  });
+
+  test("a finding worth nothing is worth nothing, not $0.00", () => {
+    expect(earnDollars(0, "input", pricedSession())).toBeNull();
+    expect(earnDollars(-5, "input", pricedSession())).toBeNull();
+    expect(earnDollars(Number.NaN, "input", pricedSession())).toBeNull();
+  });
+});
+
+describe("earnClause — money, then coins, then honesty", () => {
+  const def = TIPS["edit-thrash"]!;
+
+  test("real money when the session can price it", () => {
+    const tip = tipRow({ est_savings_tokens: 100_000, est_class: "input" });
+    expect(earnClause(tip, def, pricedSession())).toBe("saves ≈$1.00");
+  });
+
+  test("large amounts drop the cents — ≈$18 reads, ≈$18.43 pretends", () => {
+    const tip = tipRow({ est_savings_tokens: 1_843_000, est_class: "input" });
+    expect(earnClause(tip, def, pricedSession())).toBe("saves ≈$18");
+  });
+
+  test("falls back to effective coins when the session has no cost", () => {
+    const tip = tipRow({ est_savings_tokens: 2_000_000, est_class: "cache-read" });
+    // Effective, not raw: 2M cache-read tokens are 200k of real value, and
+    // quoting the raw figure here is what made the old deck unbelievable.
+    expect(earnClause(tip, def, null)).toBe("saves ~200k 🪙");
+  });
+
+  test("sub-cent findings fall through to coins rather than rendering ≈$0.00", () => {
+    const tip = tipRow({ est_savings_tokens: 100, est_class: "input" });
+    expect(earnClause(tip, def, pricedSession())).toBe("saves ~100 🪙");
+  });
+
+  test("a finding with no token value says what it IS worth", () => {
+    const noVerify = TIPS["no-verify"]!;
+    const tip = tipRow({ tip_id: "no-verify", est_savings_tokens: 0 });
+    expect(earnClause(tip, noVerify, pricedSession())).toBe("worth: fewer bugs, not fewer tokens");
+  });
+
+  test("and a wisdom tip with neither says nothing at all", () => {
+    const wisdom = TIPS["clear-between-tasks"]!;
+    const tip = tipRow({ tip_id: "clear-between-tasks", est_savings_tokens: 0 });
+    expect(earnClause(tip, wisdom, pricedSession())).toBeNull();
+  });
+});
+
+describe("tipLineLong — evidence you recognize → what to do → what it's worth", () => {
+  test("composes all three parts, in that order", () => {
+    const tip = tipRow({
+      evidence: JSON.stringify({ files: 1, edits: 14, rereads: 19, next: 15 }),
+      est_savings_tokens: 100_000,
+      est_class: "input",
+    });
+    expect(tipLineLong(tip, pricedSession(), { file: "packages/cli/src/index.ts" })).toBe(
+      `[${BRAND}]: 🔨 packages/cli/src/index.ts took 14 edits with 19 re-reads between them` +
+        ` → /clear and re-brief rather than attempt 15 → saves ≈$1.00`,
+    );
+  });
+
+  test("an unresolved filename degrades to the catalog's wording, never a placeholder", () => {
+    const tip = tipRow({
+      evidence: JSON.stringify({ files: 1, edits: 14, rereads: 19, next: 15 }),
+      est_savings_tokens: 100_000,
+    });
+    const line = tipLineLong(tip, pricedSession());
+    expect(line).not.toMatch(/\{\w+\}/);
+    expect(line).toContain("one file took 14 edits");
+  });
+
+  test("a wisdom tip has no problem half and falls back to short", () => {
+    const tip = tipRow({ tip_id: "clear-between-tasks", evidence: "{}" });
+    expect(tipLineLong(tip, pricedSession())).toBe(
+      `[${BRAND}]: 🚿 New task, old context → /clear between unrelated tasks`,
+    );
+  });
+
+  test("an unknown id still renders a bracketed, non-crashing line", () => {
+    expect(tipLineLong(tipRow({ tip_id: "does-not-exist" }))).toBe(
+      `[${BRAND}]: 💡 /remy for your session report`,
+    );
   });
 });
 

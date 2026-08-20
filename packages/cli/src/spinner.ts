@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { HINTS, envVar, getSyncState, logError, setSyncState, type TipRow } from "@ccpp/core";
-import { tipLineLong } from "./ui";
+import { tipLineLong, type TipContext } from "./ui";
+import { fileVar } from "./resolve";
 
 // The spinner tip line — the text Claude Code prints under "Forging… (2m 30s)"
 // while it works. The host picks it from `spinnerTipsOverride` in
@@ -35,8 +36,13 @@ export function spinnerEnabled(): boolean {
  * the next spinner. (Rotation is keyed by position, `custom-tip-N`, so a
  * re-ordered deck restarts that bookkeeping — harmless, it just re-shuffles.)
  * Nothing to remy → the hint deck, same rotation. */
-export function desiredTips(tips: TipRow[]): string[] {
-  return tips.length > 0 ? tips.map(tipLineLong) : [...HINTS];
+export function desiredTips(tips: TipRow[], ctx: TipContext = {}): string[] {
+  const files = ctx.files ?? new Map();
+  // NOT `tips.map(tipLineLong)`: map passes (value, index, array), so the
+  // array index would arrive as the session and be priced as a cost.
+  return tips.length > 0
+    ? tips.map((t) => tipLineLong(t, ctx.session, fileVar(t.evidence, files)))
+    : [...HINTS];
 }
 
 export type SpinnerSync =
@@ -49,15 +55,15 @@ export type SpinnerSync =
  * exactly the kind of thing this product refuses to do elsewhere (org tool
  * recs are display-only, nothing auto-installs). Deleting the key by hand is
  * therefore a valid uninstall — the remy stops touching it. */
-export function syncSpinnerTips(db: Database, tips: TipRow[]): SpinnerSync {
+export function syncSpinnerTips(db: Database, tips: TipRow[], ctx: TipContext = {}): SpinnerSync {
   if (!spinnerEnabled()) return { status: "disabled" };
-  return writeOverride(db, desiredTips(tips), false);
+  return writeOverride(db, desiredTips(tips, ctx), false);
 }
 
 /** Take the surface: `remy spinner`, the one explicitly-asked-for write. */
-export function claimSpinnerTips(db: Database, tips: TipRow[]): SpinnerSync {
+export function claimSpinnerTips(db: Database, tips: TipRow[], ctx: TipContext = {}): SpinnerSync {
   if (!spinnerEnabled()) return { status: "disabled" };
-  return writeOverride(db, desiredTips(tips), true);
+  return writeOverride(db, desiredTips(tips, ctx), true);
 }
 
 /** Hand the surface back to the host: drop our key, keep everything else. */

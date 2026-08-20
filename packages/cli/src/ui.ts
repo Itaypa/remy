@@ -1,9 +1,12 @@
 import {
   BRAND,
+  EST_WEIGHT,
+  effectiveTokens,
   envVar,
   HINTS,
   TIPS,
   renderTemplate,
+  type EstClass,
   type SessionRow,
   type TipDef,
   type TipRow,
@@ -53,6 +56,77 @@ export function rateLimitBadge(rateLimits: unknown): string | null {
  * check instead of duplicating it. */
 export function spendField(cost: number | null | undefined, rateLimits: unknown): string | null {
   return rateLimitBadge(rateLimits) ?? fmtCost(cost);
+}
+
+/** What a finding is worth, in the only unit a developer can check against
+ * their own bill.
+ *
+ * The derivation uses no price table — one would go stale, and it would be
+ * wrong for subscription accounts. Instead the session prices itself: we know
+ * what it cost (`cost_usd`, straight from the host) and we know its token mix,
+ * so its own blended rate converts the estimate. Two measured numbers and one
+ * division.
+ *
+ * Returns null when the session carries no cost — measured on real data, 9 of
+ * 13 local sessions have none, because `cost_usd` only lands when the
+ * statusline runs. The caller falls back to effective 🪙 rather than inventing
+ * a rate, because a coach that shows a number it cannot derive is worse than
+ * one that shows fewer numbers. */
+export type TipLineSession = Pick<
+  SessionRow,
+  "cost_usd" | "tokens_in" | "tokens_out" | "cache_read" | "cache_write"
+> | null | undefined;
+
+/** The two things a coaching line needs that the tip row cannot carry: a
+ * session to price the earn against, and the hash→filename map for the working
+ * tree in front of the developer. Both are optional and both degrade to the
+ * catalog's fallbacks, so a caller with neither still renders a valid line. */
+export interface TipContext {
+  session?: TipLineSession;
+  files?: Map<string, string>;
+}
+
+export function earnDollars(
+  estTokens: number,
+  estClass: string | null | undefined,
+  session: TipLineSession,
+): number | null {
+  const effective = effectiveTokens(estTokens, (estClass as EstClass) ?? "input");
+  if (effective <= 0) return null;
+  if (!session) return null;
+  const cost = session.cost_usd;
+  if (cost == null || !Number.isFinite(cost) || cost <= 0) return null;
+  // The same weighting applied to the session itself, so the ratio is
+  // base-input-equivalents on both sides of the division.
+  const sessionEffective =
+    (session.tokens_in ?? 0) +
+    (session.tokens_out ?? 0) +
+    (session.cache_read ?? 0) * EST_WEIGHT["cache-read"] +
+    (session.cache_write ?? 0) * EST_WEIGHT["cold-write"];
+  if (!Number.isFinite(sessionEffective) || sessionEffective <= 0) return null;
+  return (effective * cost) / sessionEffective;
+}
+
+/** The third part of every coaching line, composed here and never authored in
+ * the catalog — so no tip can quietly claim a value nothing measured.
+ *
+ * Order of preference: real money, then effective 🪙 when the session has no
+ * cost recorded, then the catalog's `worth` for the findings whose payoff
+ * genuinely isn't tokens, then nothing at all. */
+export function earnClause(
+  tip: TipRow,
+  def: TipDef,
+  session: TipLineSession,
+): string | null {
+  const dollars = earnDollars(tip.est_savings_tokens, tip.est_class, session);
+  if (dollars != null) {
+    // Below a cent there is no honest way to render it, and "≈$0.00" reads as
+    // a bug. Fall through to the coin figure, which still has resolution.
+    if (dollars >= 0.01) return `saves ≈$${dollars < 10 ? dollars.toFixed(2) : Math.round(dollars)}`;
+  }
+  const effective = effectiveTokens(tip.est_savings_tokens, (tip.est_class as EstClass) ?? "input");
+  if (effective > 0) return `saves ~${fmtTok(effective)} 🪙`;
+  return def.worth ? `worth: ${def.worth}` : null;
 }
 
 /** Below this, the field goes yellow: the cache is nearly out and wrapping up
@@ -189,15 +263,19 @@ export function tipVars(
   return { ...def.fallbacks, ...evidence, ...extra };
 }
 
-function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
+function tipBody(
+  tip: TipRow,
+  def: TipDef,
+  template = def.short,
+  extra: Record<string, string | number> = {},
+): string {
   let evidence: Record<string, string | number> = {};
   try {
     evidence = tip.evidence ? JSON.parse(tip.evidence) : {};
   } catch {
     // evidence is display-only
   }
-  const value = tip.est_savings_tokens > 0 ? ` → +${fmtTok(tip.est_savings_tokens)} 🪙` : "";
-  const rendered = renderTemplate(template, tipVars(def, evidence));
+  const rendered = renderTemplate(template, tipVars(def, evidence, extra));
   // Not every tip row carries the evidence its template asks for: the adaptive
   // analyzer files tips with evidence {source:"adaptive"} and no session
   // numbers at all (adapt.ts), and it may pick any catalog id, including a
@@ -206,8 +284,7 @@ function tipBody(tip: TipRow, def: TipDef, template = def.short): string {
   // inventing a number would be worse — so without this the statusline reads
   // "Same file edited {edits}×". The title says the same thing with no
   // evidence in it, which is exactly the right thing to say when we have none.
-  const body = UNRESOLVED_PLACEHOLDER.test(rendered) ? def.title : rendered;
-  return `${body}${value}`;
+  return UNRESOLVED_PLACEHOLDER.test(rendered) ? def.title : rendered;
 }
 
 /** Non-global on purpose: a /g regex carries lastIndex between .test() calls. */
@@ -220,20 +297,43 @@ const UNRESOLVED_PLACEHOLDER = /\{\w+\}/;
 export function tipLine(tip: TipRow): string {
   const def = TIPS[tip.tip_id];
   if (!def) return `[${BRAND}]: 💡 /remy for your session report`;
-  return `[${BRAND}]: ${def.emoji} ${tipBody(tip, def)}`;
+  // The narrow form keeps the raw-token value clause: the splash box has no
+  // room for "saves ≈$0.40" alongside a 55-char body, and no session row to
+  // price it with. Effective tokens rather than raw, so it can never disagree
+  // with what the wide form says about the same finding.
+  const effective = effectiveTokens(tip.est_savings_tokens, (tip.est_class as EstClass) ?? "input");
+  const value = effective > 0 ? ` → +${fmtTok(effective)} 🪙` : "";
+  return `[${BRAND}]: ${def.emoji} ${tipBody(tip, def)}${value}`;
 }
 
-/** The same line, wide-surface form: `TipDef.live` instead of `short`, so a
- * surface with room gets the session's own evidence spoken back to the
- * player — "[🐭 REMY]: 🔨 you edited one file 56× this session, re-reading
- * between tries → /clear and re-brief beats another go → +265k 🪙". Same
- * skeleton as tipLine() (brand · emoji · problem → solution → value), just
- * the long problem clause; wisdom tips have no evidence and fall back to
- * `short`, which is why this can't simply replace tipLine() everywhere. */
-export function tipLineLong(tip: TipRow): string {
+/** The wide-surface line, and the shape the whole catalog is written to:
+ *
+ *   [🐭 REMY]: 🔨 packages/cli/src/index.ts took 14 edits with 19 re-reads
+ *              between them → /clear and re-brief before attempt 15 → saves ≈$0.40
+ *
+ * — evidence you recognize, the thing to do, and what it's worth. Used by the
+ * spinner deck and the Stop-hook nudge, both of which have the full terminal
+ * width; `tipLine()` stays the narrow form for the boxed splash.
+ *
+ * `extra` carries the two values the renderer cannot derive from the row
+ * alone: `file`, resolved from the stored hash by whoever has the working tree
+ * in front of them (resolve.ts), and anything else a caller has measured. Left
+ * out, the catalog's `fallbacks` put the old generic wording back, which is the
+ * whole reason this degrades quietly instead of printing a `{placeholder}`.
+ *
+ * Wisdom tips have no session evidence, so they have no `problem` half and
+ * fall back to `short` — which is why this can't simply replace tipLine(). */
+export function tipLineLong(
+  tip: TipRow,
+  session?: TipLineSession,
+  extra: Record<string, string | number> = {},
+): string {
   const def = TIPS[tip.tip_id];
   if (!def) return `[${BRAND}]: 💡 /remy for your session report`;
-  return `[${BRAND}]: ${def.emoji} ${tipBody(tip, def, def.live ?? def.short)}`;
+  const template = def.problem && def.action ? `${def.problem} → ${def.action}` : def.short;
+  const body = tipBody(tip, def, template, extra);
+  const earn = earnClause(tip, def, session);
+  return `[${BRAND}]: ${def.emoji} ${body}${earn ? ` → ${earn}` : ""}`;
 }
 
 /** "[🐭 REMY]: context at 92% — every reply re-reads 184k 🪙" — the
@@ -356,6 +456,21 @@ function row(label: string, text: string): string[] {
   );
 }
 
+/** `{file}` from an already-parsed evidence object, or nothing.
+ *
+ * Local rather than imported from resolve.ts on purpose: this file is pure
+ * rendering, and resolve.ts spawns a subprocess. Keeping the lookup here means
+ * ui.ts never pulls process-spawning code into its import graph — the caller
+ * does the resolving and hands the map in. */
+function fileVarFrom(
+  evidence: Record<string, string | number>,
+  files: Map<string, string> | undefined,
+): Record<string, string> {
+  const hash = evidence.file_hash;
+  const name = typeof hash === "string" ? files?.get(hash) : undefined;
+  return name ? { file: name } : {};
+}
+
 /** "claude-haiku-4-5-20251001" → "haiku-4-5" — the part a human reads. */
 function shortModel(model: string | null): string {
   if (!model) return "unknown model";
@@ -366,6 +481,8 @@ export function renderReport(opts: {
   session: SessionRow;
   tips: TipRow[];
   active: TipRow | null;
+  /** hash → repo-relative filename, resolved by the caller (resolve.ts). */
+  files?: Map<string, string>;
   adaptive?: { enabled: boolean; lastRunHours: number | null };
 }): string {
   const s = opts.session;
@@ -386,12 +503,19 @@ export function renderReport(opts: {
   );
 
   // Waste rows worth ~0 tokens are noise, not insight — only show real losses.
-  const waste = opts.tips.filter((t) => t.est_savings_tokens > 0);
+  // Measured in effective tokens and priced off this session, so the figure
+  // here is the same one the coaching line quotes rather than a raw count that
+  // silently disagrees with it.
+  const waste = opts.tips
+    .map((t) => ({ t, worth: earnDollars(t.est_savings_tokens, t.est_class, s) }))
+    .filter((w) => effectiveTokens(w.t.est_savings_tokens, (w.t.est_class as EstClass) ?? "input") > 0);
   lines.push(sep("🔎 waste found this session"));
   if (waste.length > 0) {
-    for (const t of waste) {
+    for (const { t, worth } of waste) {
       const def = TIPS[t.tip_id];
-      lines.push(`│ ${def?.emoji ?? "•"} ${def?.title ?? t.tip_id} — ~${fmtTok(t.est_savings_tokens)} 🪙 recoverable`);
+      const eff = effectiveTokens(t.est_savings_tokens, (t.est_class as EstClass) ?? "input");
+      const amount = worth != null && worth >= 0.01 ? `≈$${worth.toFixed(2)}` : `~${fmtTok(eff)} 🪙`;
+      lines.push(`│ ${def?.emoji ?? "•"} ${def?.title ?? t.tip_id} — ${amount} recoverable`);
     }
   } else if (opts.tips.length === 0) {
     lines.push("│ ✨ none — clean session!");
@@ -414,7 +538,16 @@ export function renderReport(opts: {
       // A stored row from an older version, or an adaptive row with no session
       // numbers, still renders a whole sentence here — this path has no title
       // fallback to catch a stray placeholder.
-      const vars = tipVars(def, evidence, { est: fmtTok(opts.active.est_savings_tokens) });
+      const activeEff = effectiveTokens(
+        opts.active.est_savings_tokens,
+        (opts.active.est_class as EstClass) ?? "input",
+      );
+      const vars = tipVars(def, evidence, {
+        est: fmtTok(activeEff),
+        // Resolved from the working tree, never stored — see resolve.ts. Absent
+        // when it could not be resolved, which lets `fallbacks` stand in.
+        ...fileVarFrom(evidence, opts.files),
+      });
       lines.push(`│ ${def.emoji} ${def.title}`);
       // Labeled rows: what happened → what it's worth → what to do. The
       // adaptive analyzer's own sentence (with the user's numbers) replaces
@@ -422,8 +555,13 @@ export function renderReport(opts: {
       lines.push(
         ...row("what happened", opts.active.why ? `🤖 ${opts.active.why}` : renderTemplate(def.what, vars)),
       );
-      if (opts.active.est_savings_tokens > 0) {
-        lines.push(...row("worth", `~${fmtTok(opts.active.est_savings_tokens)} 🪙 back in your pocket`));
+      const worth = earnDollars(opts.active.est_savings_tokens, opts.active.est_class, s);
+      if (worth != null && worth >= 0.01) {
+        lines.push(...row("worth", `≈$${worth.toFixed(2)} back in your pocket`));
+      } else if (activeEff > 0) {
+        lines.push(...row("worth", `~${fmtTok(activeEff)} 🪙 back in your pocket`));
+      } else if (def.worth) {
+        lines.push(...row("worth", def.worth));
       }
       lines.push(...row("next time", renderTemplate(def.fix, vars)));
       if (def.cite?.quote) {

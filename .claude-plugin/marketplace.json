@@ -11,7 +11,7 @@
       "name": "remy",
       "displayName": "REMY",
       "source": "./packages/plugin-claude-code",
-      "description": "In-agent coaching for Claude Code: a live statusline (context, prompt-cache clock, cost, git), deterministic waste detection, and short quantified tips delivered through zero-token surfaces. Metadata-only and fully local — no account, no server, nothing ever uploaded.",
+      "description": "In-agent coaching for Claude Code: a live statusline (context, prompt-cache clock, cost, git), deterministic waste detection, and tips that name the file, the fix, and what it costs you. Metadata-only and fully local — no account, no server, nothing ever uploaded.",
       "category": "productivity",
       "author": {
         "name": "Itay Pahima"

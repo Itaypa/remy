@@ -21,7 +21,14 @@ import {
 import type { Finding } from "../src/rules";
 
 const NOW = "2026-07-26T10:00:00.000Z";
-const f = (tipId: string, est: number): Finding => ({ tipId, evidence: { count: 1 }, estSavingsTokens: est });
+const f = (tipId: string, est: number): Finding => ({
+  tipId,
+  evidence: { count: 1 },
+  estSavingsTokens: est,
+  // Neutral 1x class: these tests are about the queue mechanics, so every
+  // finding is priced the same and raw order equals worth order.
+  estClass: "input",
+});
 
 describe("tip engine", () => {
   test("one active tip; biggest savings wins; rest queue", () => {
@@ -176,10 +183,10 @@ describe("tip engine", () => {
     // already in a user's DB — the stale, inflated figure went on winning the
     // one active-tip slot, because promoteNext ranks by exactly this column.
     const db = openDb(":memory:");
-    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 50 }, estSavingsTokens: 90_000 }], NOW);
+    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 50 }, estSavingsTokens: 90_000, estClass: "input" }], NOW);
     expect(openTips(db)[0]!.est_savings_tokens).toBe(90_000);
 
-    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 20 }, estSavingsTokens: 5_000 }], NOW);
+    recordFindings(db, "s1", [{ tipId: "context-tax", evidence: { pct: 20 }, estSavingsTokens: 5_000, estClass: "input" }], NOW);
     expect(openTips(db)[0]!.est_savings_tokens).toBe(5_000);
     expect(openTips(db)).toHaveLength(1); // refreshed, not duplicated
   });

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../src/store";
-import { analyzeSession, shouldSuppressPlanMode, type Finding } from "../src/rules";
+import {
+  analyzeSession,
+  effectiveTokens,
+  findingValue,
+  shouldSuppressPlanMode,
+  type EstClass,
+  type Finding,
+} from "../src/rules";
 import { parseTranscript } from "../src/transcript";
 import { activeTip, openTips, recordFindings } from "../src/tips";
 import { recentSessions } from "../src/store";
@@ -58,7 +65,11 @@ describe("the noise budget: many findings, one voice", () => {
     recordFindings(db, "chaos", findings, new Date().toISOString());
 
     const active = activeTip(db);
-    const best = findings.reduce((a, b) => (b.estSavingsTokens > a.estSavingsTokens ? b : a));
+    // By WORTH, not by raw token count. The two differ by up to 19× across
+    // price classes, and while the ranking used the raw number, `context-band`
+    // — a sum of cache-read context — held the one active slot against every
+    // tip that could name a file and an action.
+    const best = findings.reduce((a, b) => (findingValue(b) > findingValue(a) ? b : a));
     expect(active?.tip_id).toBe(best.tipId);
 
     // Everything else waits its turn rather than piling onto the surface.
@@ -71,8 +82,31 @@ describe("the noise budget: many findings, one voice", () => {
   test("the queue is ordered by what it would save, best first", () => {
     const db = openDb(":memory:");
     recordFindings(db, "chaos", analyze(chaos), new Date().toISOString());
-    const savings = openTips(db, 10).map((t) => t.est_savings_tokens);
-    expect(savings).toEqual([...savings].sort((a, b) => b - a));
+    const worth = openTips(db, 10).map((t) =>
+      effectiveTokens(t.est_savings_tokens, (t.est_class as EstClass) ?? "input"),
+    );
+    expect(worth).toEqual([...worth].sort((a, b) => b - a));
+    db.close();
+  });
+
+  test("a big cache-read finding does not outrank a smaller fresh-input one", () => {
+    // The regression this whole change exists for, as a unit. `context-band`
+    // files an enormous raw number because it sums per-turn CONTEXT — which is
+    // re-sent from cache at a tenth of the input price. Ranked raw, it wins by
+    // 50×; ranked by worth, it loses, which is the correct answer.
+    const db = openDb(":memory:");
+    const now = new Date().toISOString();
+    recordFindings(
+      db,
+      "s1",
+      [
+        { tipId: "context-band", evidence: { turns: 9 }, estSavingsTokens: 2_000_000, estClass: "cache-read" },
+        { tipId: "edit-thrash", evidence: { edits: 9 }, estSavingsTokens: 300_000, estClass: "input" },
+      ],
+      now,
+    );
+    expect(activeTip(db)?.tip_id).toBe("edit-thrash");
+    expect(openTips(db, 5).map((t) => t.tip_id)).toEqual(["edit-thrash", "context-band"]);
     db.close();
   });
 });

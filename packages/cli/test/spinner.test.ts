@@ -20,8 +20,20 @@ const TIP: TipRow = {
   session_id: "s1",
   created_at: "2026-08-04T10:00:00.000Z",
   status: "active",
-  evidence: JSON.stringify({ edits: 9, bash_calls: 4 }),
-  est_savings_tokens: 10_000,
+  evidence: JSON.stringify({
+    edits: 9,
+    files: 3,
+    bash_calls: 4,
+    scope: "3 files",
+    shell: "4 shell runs",
+    bash_mix: "3 git, 1 file read",
+  }),
+  // Genuinely zero: skipping a verify pass ships bugs, it does not spend
+  // tokens. The fixture used to carry a flat 10,000 that matched the rule's
+  // old hardcoded constant, so the deck rendered a price for a finding that
+  // has none — which is what the `worth` assertion below now pins.
+  est_savings_tokens: 0,
+  est_class: "input",
   why: null,
 };
 
@@ -72,20 +84,59 @@ describe("spinner tip override", () => {
   });
 
   test("the whole open queue rides the deck, so it moves on without a dismiss", () => {
-    const second: TipRow = { ...TIP, id: 2, tip_id: "reread-churn", evidence: JSON.stringify({ files: 8, worst: 12 }), est_savings_tokens: 18_000 };
+    const second: TipRow = {
+      ...TIP,
+      id: 2,
+      tip_id: "reread-churn",
+      evidence: JSON.stringify({
+        files: 8,
+        worst: 12,
+        more: "and 7 other files went the same way",
+        file_hash: "0123456789abcdef",
+      }),
+      est_savings_tokens: 18_000,
+    };
     claimSpinnerTips(db, [TIP, second]);
     const tips = read().spinnerTipsOverride.tips;
     // Two entries → the host rotates between them across waits; one entry
     // would have parked on the first finding until it was dismissed.
     expect(tips).toHaveLength(2);
-    expect(tips[1]).toContain("read again and again");
+    expect(tips[1]).toContain("got read 12× this session");
+  });
+
+  test("an unresolvable file hash degrades to the catalog's wording, never a placeholder", () => {
+    // The whole filename mechanism is best-effort by design: a hash only
+    // resolves for someone with that file on disk. Every other case — another
+    // project, a deleted file, a repo too big to walk — must land on the
+    // fallback rather than printing "{file}" at a developer.
+    const orphan: TipRow = {
+      ...TIP,
+      id: 3,
+      tip_id: "edit-thrash",
+      evidence: JSON.stringify({ files: 1, edits: 14, rereads: 19, next: 15, file_hash: "deadbeefdeadbeef" }),
+      est_savings_tokens: 55_000,
+    };
+    claimSpinnerTips(db, [orphan]);
+    const line = read().spinnerTipsOverride.tips[0];
+    expect(line).not.toMatch(/\{\w+\}/);
+    expect(line).toContain("one file took 14 edits with 19 re-reads between them");
+
+    // …and resolves to the real name when the map has it.
+    expect(
+      desiredTips([orphan], { files: new Map([["deadbeefdeadbeef", "packages/cli/src/index.ts"]]) })[0],
+    ).toContain("packages/cli/src/index.ts took 14 edits with 19 re-reads between them");
   });
 
   test("the line speaks the session's own evidence, not the statusline shorthand", () => {
     claimSpinnerTips(db, [TIP]);
     const line = read().spinnerTipsOverride.tips[0];
-    expect(line).toContain("9 edits shipped and not one test");
-    expect(line).toContain("+10k 🪙");
+    // The three parts: evidence the developer recognizes, the thing to do,
+    // and what it is worth — which here is not tokens, and says so.
+    expect(line).toContain("9 edits across 3 files; of 4 shell runs (3 git, 1 file read), not one was a test or build");
+    expect(line).toContain("→ end with a check it can run");
+    expect(line).toContain("→ worth: fewer bugs, not fewer tokens");
+    expect(line).not.toContain("🪙");
+    expect(line).toContain(BRAND);
   });
 
   test("an active tip takes the whole line — one entry, defaults excluded", () => {

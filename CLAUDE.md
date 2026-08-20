@@ -63,6 +63,7 @@ packages/
                               #   adaptive coach payload
   cli/                        # `remy` binary: ingest | statusline | report | dismiss | init
                               #   | spinner | links | adapt
+                              #   resolve.ts: hash → filename at RENDER time (stores nothing)
   plugin-claude-code/         # first host adapter: plugin manifest, hooks, /remy commands,
                               #   bin/remy (the committed launcher — see Shipping below),
                               #   art/rat.txt (the source art)
@@ -91,8 +92,25 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   `remy adapt --off` / `REMY_ADAPT=0` disables; `REMY_ADAPT_CMD` stubs the backend for
   tests. If the claude CLI is missing or fails, coaching degrades to pure deterministic —
   silently.
+- **Every rule-backed tip is three parts: `problem → action → earn`** (`TipDef.problem`
+  and `TipDef.action` in `core/src/catalog.ts`; `catalog.test.ts` enforces the shape). The
+  earn is **never authored** — `earnClause()` derives it from the finding's estimate, its
+  price class, and the session's own measured `cost_usd`. Every `Finding` must declare an
+  `estClass` (`cache-read` 0.1× · `input` 1× · `cold-write` 1.9×), because raw token counts
+  are not comparable: ~99% of a session's tokens are cache reads, and the queue **ranks by
+  this number**, so an unpriced estimate decides which tip a developer sees. A finding with
+  no derivable value sets `TipDef.worth` and says what it *is* worth instead of inventing a
+  figure.
+- **Filenames are resolved, never stored.** `schema.ts` still admits no path, and
+  `hashPath` is unsalted — so `cli/src/resolve.ts` recovers a name at render time by
+  re-hashing the local working tree and matching the stored hash, then drops it. A name
+  therefore only ever appears for someone who already has that file on disk. Rules put a
+  `file_hash` in evidence; unresolved, the catalog's `fallbacks` restore the generic
+  wording. Nothing new is stored and no second outbound path exists — `privacy.test.ts`
+  asserts resolve.ts has no DB handle, no file writes, and no spawn but `git ls-files`.
 - **Design language = `docs/design-language.md` ("Coin").** Playful, emoji + ASCII art,
-  **🪙 is the token unit**. The noise budget is law: one active tip at a time,
+  **🪙 is the token unit**, but a coaching line's earn is in dollars when the session
+  carries a measured cost. The noise budget is law: one active tip at a time,
   dismiss-with-memory (30 days), warnings only for imminent context overflow. Splash line
   priority: your personal tip, else a rotating hint. No gamification
   (XP/levels/streaks/achievements) — deliberately removed as redundant; the coaching

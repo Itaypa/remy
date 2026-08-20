@@ -192,6 +192,28 @@ describe("privacy gate", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("the filename resolver reads the working tree and writes nothing", () => {
+    // resolve.ts is the one place a real filename exists in this codebase. It
+    // recovers names by re-hashing the local tree and matching against the
+    // hashes already stored, then hands them to the renderer — which is only
+    // sound while nothing on that path persists the result. A name reaching
+    // the DB (or a settings file, or a log) would put a path into storage that
+    // schema.ts is built to make impossible, and it would do so without
+    // touching schema.ts at all, which is exactly the kind of change that
+    // needs a test rather than a reviewer's memory.
+    const src = readFileSync(
+      join(import.meta.dir, "..", "..", "cli", "src", "resolve.ts"),
+      "utf8",
+    );
+    // No SQL, no database handle.
+    expect(src).not.toMatch(/\b(INSERT|UPDATE|CREATE|DELETE)\b|\bdb\b|Database/);
+    // No filesystem or settings writes.
+    expect(src).not.toMatch(/writeFileSync|appendFileSync|renameSync|mkdirSync|Bun\.write/);
+    // The only child process it may start is a read-only git enumeration.
+    const spawns = [...src.matchAll(/Bun\.spawn\w*\(\s*\[([^\]]*)\]/g)].map((m) => m[1]!.trim());
+    expect(spawns).toEqual([`"git", "ls-files", "-z"`]);
+  });
+
   test("adapt payload carries no content — numbers and whitelisted ids only", () => {
     const db = openDb(":memory:");
     // Seed metadata that LOOKS hostile; the payload must still be content-free.
@@ -346,7 +368,9 @@ describe("privacy gate", () => {
       tips: {
         tip_id: "catalog id", session_id: "IdStr", created_at: "ISO timestamp",
         status: "queued|active|dismissed enum",
-        evidence: "rule-authored JSON of numbers and closed-set strings",
+        evidence:
+          "rule-authored JSON of numbers, closed-set strings, and Hash16 file handles — never a path",
+        est_class: "EstClass — closed enum (cache-read|input|cold-write), rule-authored",
         why: "the adaptive analyzer's own sentence, length-capped and sanitized (adapt.ts)",
       },
       sync_state: { key: "local kv key", value: "local kv value" },

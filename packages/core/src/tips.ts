@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Finding } from "./rules";
+import { EST_WEIGHT } from "./rules";
 import { envVar } from "./env";
 import { getSyncState, setSyncState, type TipRow } from "./store";
 
@@ -7,6 +8,22 @@ import { getSyncState, setSyncState, type TipRow } from "./store";
 // 30 days — the noise budget is enforced here, not in the UI.
 
 const DISMISS_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Rank by what a finding is WORTH, not by how many raw tokens it names.
+ *
+ * Generated from EST_WEIGHT rather than written out as literals, because this
+ * is the second copy of that table and the first one lives in TypeScript: a
+ * hand-written SQL CASE would silently keep ranking by stale weights the day a
+ * class is added or re-priced. Every class in the enum appears here by
+ * construction; unclassified legacy rows fall through to 1×.
+ *
+ * This ordering is the whole point of the price class. While it was a bare
+ * `est_savings_tokens DESC`, `context-band` — a sum of cache-read context, so
+ * 28.7M raw for ~2.9M of real value — permanently outranked every tip that
+ * could name a file and an action. */
+const VALUE_SQL = `est_savings_tokens * (CASE est_class ${Object.entries(EST_WEIGHT)
+  .map(([cls, w]) => `WHEN '${cls}' THEN ${w}`)
+  .join(" ")} ELSE 1 END)`;
 
 // The Stop-hook nudge (cli/src/index.ts) surfaces the active tip as a
 // transient systemMessage right after a turn ends — a second, louder
@@ -52,17 +69,20 @@ export function recordFindings(
       // session that turned out cheaper on the second look — silently kept the
       // old figure. That also meant a fix to any rule's arithmetic was inert
       // for every row already in a user's DB. The newest analysis wins.
-      db.query(`UPDATE tips SET est_savings_tokens = ?, evidence = ?, session_id = ? WHERE id = ?`).run(
+      db.query(
+        `UPDATE tips SET est_savings_tokens = ?, est_class = ?, evidence = ?, session_id = ? WHERE id = ?`,
+      ).run(
         f.estSavingsTokens,
+        f.estClass,
         JSON.stringify(f.evidence),
         sessionId,
         existing.id,
       );
     } else {
       db.query(
-        `INSERT INTO tips (tip_id, session_id, created_at, status, evidence, est_savings_tokens)
-         VALUES (?, ?, ?, 'queued', ?, ?)`,
-      ).run(f.tipId, sessionId, nowIso, JSON.stringify(f.evidence), f.estSavingsTokens);
+        `INSERT INTO tips (tip_id, session_id, created_at, status, evidence, est_savings_tokens, est_class)
+         VALUES (?, ?, ?, 'queued', ?, ?, ?)`,
+      ).run(f.tipId, sessionId, nowIso, JSON.stringify(f.evidence), f.estSavingsTokens, f.estClass);
     }
   }
   promoteNext(db);
@@ -80,7 +100,7 @@ export function promoteNext(db: Database): void {
   const active = db.query(`SELECT id FROM tips WHERE status = 'active' LIMIT 1`).get();
   if (active) return;
   const next = db
-    .query(`SELECT id FROM tips WHERE status = 'queued' ORDER BY est_savings_tokens DESC, id ASC LIMIT 1`)
+    .query(`SELECT id FROM tips WHERE status = 'queued' ORDER BY ${VALUE_SQL} DESC, id ASC LIMIT 1`)
     .get() as { id: number } | null;
   if (next) db.query(`UPDATE tips SET status = 'active' WHERE id = ?`).run(next.id);
 }
@@ -97,7 +117,7 @@ export function openTips(db: Database, limit = 5): TipRow[] {
   return db
     .query(
       `SELECT * FROM tips WHERE status IN ('active','queued')
-       ORDER BY est_savings_tokens DESC, id ASC LIMIT ?`,
+       ORDER BY ${VALUE_SQL} DESC, id ASC LIMIT ?`,
     )
     .all(limit) as TipRow[];
 }
@@ -106,7 +126,7 @@ export function sessionTips(db: Database, sessionId: string): TipRow[] {
   return db
     .query(
       `SELECT * FROM tips WHERE session_id = ? AND status != 'dismissed'
-       ORDER BY est_savings_tokens DESC`,
+       ORDER BY ${VALUE_SQL} DESC`,
     )
     .all(sessionId) as TipRow[];
 }

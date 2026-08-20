@@ -254,8 +254,17 @@ describe("waste signatures", () => {
     const yes = analyzeSession(snapshot({ toolCalls: [...edits, bash("git")], editCalls: 4 }));
     const f = yes.find((x) => x.tipId === "no-verify");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ edits: 4, bash_calls: 1 });
-    expect(f!.estSavingsTokens).toBe(10_000);
+    expect(f!.evidence).toEqual({
+      edits: 4,
+      files: 1,
+      bash_calls: 1,
+      scope: "one file",
+      shell: "one shell run",
+      bash_mix: "1 git call",
+    });
+    // Zero on purpose: this used to be a flat 10,000 that no measurement
+    // produced. What a verify pass buys is fewer bugs, and the catalog says so.
+    expect(f!.estSavingsTokens).toBe(0);
 
     const verified = analyzeSession(
       snapshot({ toolCalls: [...edits, bash("git"), bash("test")], editCalls: 4 }),
@@ -299,7 +308,7 @@ describe("waste signatures", () => {
     const yes = analyzeSession(snapshot({ toolCalls: Array.from({ length: 6 }, () => bash("read-cmd")) }));
     const f = yes.find((x) => x.tipId === "tools-over-bash");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ count: 6 });
+    expect(f!.evidence).toEqual({ count: 6, bash_total: 6, tool_reads: 0 });
     expect(f!.estSavingsTokens).toBe(6_000); // (6 - 2 free) × 1.5k
 
     // Five is still ordinary shell work.
@@ -320,7 +329,7 @@ describe("waste signatures", () => {
     const yes = analyzeSession(snapshot({ firstContextTokens: 50_000 }));
     const f = yes.find((x) => x.tipId === "context-tax");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ pct: 25, first_tokens: 50_000 });
+    expect(f!.evidence).toEqual({ pct: 25, first_tokens: 50_000, first_ctx: "50k" });
     expect(f!.estSavingsTokens).toBe(35_000);
 
     const under = analyzeSession(snapshot({ firstContextTokens: 44_999 }));
@@ -381,8 +390,11 @@ describe("waste signatures", () => {
     );
     const f = yes.find((x) => x.tipId === "cache-idle");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ count: 2, mins: 120 });
-    expect(f!.estSavingsTokens).toBe(252_000); // 90% of the re-written tokens
+    expect(f!.evidence).toEqual({ count: 2, mins: 120, gap: "2.0h", ctx: "140k" });
+    // The raw re-written count, with the cold-vs-warm price difference now
+    // carried by the class instead of a 0.9 fudge on the token count.
+    expect(f!.estSavingsTokens).toBe(280_000);
+    expect(f!.estClass).toBe("cold-write");
 
     // Zero expiries never fires regardless of tokens (transcript.ts already
     // filters to real gaps + fat re-writes, so any count is trustworthy).
@@ -394,8 +406,11 @@ describe("waste signatures", () => {
     const yes = analyzeSession(snapshot({ redZoneTurns: 4, redZoneExcessTokens: 180_000 }));
     const f = yes.find((x) => x.tipId === "context-band");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ turns: 4 });
+    expect(f!.evidence).toEqual({ turns: 4, total_turns: 4, peak_pct: 0 });
     expect(f!.estSavingsTokens).toBe(180_000);
+    // The excess is context re-sent from cache, not fresh input — billing it
+    // at 1x is what made this tip claim "+219M" and outrank everything.
+    expect(f!.estClass).toBe("cache-read");
 
     // 1-2 red turns = crossed the line then compacted promptly — healthy, silent.
     const prompt = analyzeSession(snapshot({ redZoneTurns: 2, redZoneExcessTokens: 90_000 }));
@@ -469,7 +484,7 @@ describe("habit rules", () => {
     const findings = analyzeHabits([trivialOpus(), trivialOpus(), trivialOpus(), trivialOpus()]);
     const f = findings.find((x) => x.tipId === "model-fit");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ n: 4, tier: "opus" });
+    expect(f!.evidence).toEqual({ n: 4, total: 4, tier: "opus", model: "opus-4-8" });
     expect(f!.estSavingsTokens).toBe(Math.round(0.8 * 4 * 11_000));
   });
 
@@ -542,7 +557,7 @@ describe("habit rules", () => {
       snapshot({ fatReads: 3, fatReadTokens: 60_000, fatReadWorstTokens: 30_000 }),
     ).find((x) => x.tipId === "read-in-slices");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ count: 3, worst_k: 30 });
+    expect(f!.evidence).toEqual({ count: 3, worst_k: 30, total_k: 60 });
     // Only what a bounded read would not have cost: 60k - 3x8k, at 0.9 because
     // the window re-reads it at cache price after the first turn.
     expect(f!.estSavingsTokens).toBe(Math.round((60_000 - 24_000) * 0.9));
