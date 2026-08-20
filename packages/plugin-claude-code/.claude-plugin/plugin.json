@@ -1,7 +1,7 @@
 {
   "name": "remy",
   "description": "🐀 In-agent coaching: live statusline stats, waste detection, quantified tips. Metadata-only, zero tokens burned.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "author": {
     "name": "Itay Pahima"
   },
