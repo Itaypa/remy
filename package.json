@@ -11,7 +11,8 @@
     "test": "bun test",
     "preflight": "bun scripts/preflight.ts",
     "mutate": "bun scripts/mutation.ts",
-    "adapt:smoke": "bun scripts/adapt-smoke.ts"
+    "adapt:smoke": "bun scripts/adapt-smoke.ts",
+    "analytics": "bun scripts/analytics.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.23",

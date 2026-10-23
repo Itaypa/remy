@@ -18,8 +18,8 @@
 # REMY 🐭
 
 **The coaching layer for AI coding agents.** Live statusline stats, waste detection, and
-quantified tips — inside Claude Code. Metadata-only, zero tokens burned, and nothing ever
-leaves your machine.
+quantified tips — inside Claude Code. Metadata-only, zero tokens burned, and nothing about
+your work ever leaves your machine.
 
 Named after the rat who sits on the cook's head and guides his hands: he never cooks for
 you, and he never touches your code.
@@ -73,16 +73,22 @@ Restart Claude Code. Save tokens.
 
 ## Privacy
 
-**Nothing ever leaves your machine.** There is no account, no server, no telemetry, no
-upload — and no code path that could add one by accident. Everything REMY knows lives in
-one SQLite file at `~/.remy/remy.db`.
+**Nothing about your work ever leaves your machine.** There is no account, no server, and
+nothing REMY records is ever uploaded — there is no code path that could do it by
+accident. Everything it knows lives in one SQLite file at `~/.remy/remy.db`.
+
+The only network traffic is a **daily ping**: once a day, the launcher fetches a one-byte
+file from this repo's GitHub release for your version and platform, so we can count how
+many machines ran REMY that day. It carries nothing — no payload, no id, no session data;
+GitHub's download counter for that file is the entire analytics layer. Turn it off with
+`remy analytics --off` or `REMY_ANALYTICS=0`.
 
 What it stores there is metadata only: token counts, tool names, event types, and
 sha256-hashed paths. No prompts, no code, no file contents, no raw paths — the schema is a
 whitelist and the test suite proves it, including a check that no source file in `core`
 contains a network call at all (`packages/core/test/privacy.test.ts`).
 
-The one exception, stated plainly: the optional **adaptive coach** makes at most one
+The other exception, stated plainly: the optional **adaptive coach** makes at most one
 `claude -p --model sonnet` call a day on your own machine, to pick which catalog tip fits
 your recent habits. Its payload is numbers and tip ids — free text is structurally
 impossible. Turn it off with `remy adapt --off`; pick another model with

@@ -39,9 +39,11 @@ repo and is not coming back unless this one succeeds. Do not re-add a network cl
 
 ## The privacy invariant (non-negotiable)
 
-**Nothing ever leaves your machine.** Everything REMY knows lives in one local SQLite
-file at `~/.remy/remy.db`. There is no account, no server, no telemetry, no upload — and
-no code path that could add one by accident.
+**Nothing about your work ever leaves your machine.** Everything REMY knows lives in one
+local SQLite file at `~/.remy/remy.db`. There is no account, no server, no upload of
+anything it records — and no code path that could add one by accident. The only network
+traffic REMY generates is the launcher's **daily ping** (below): a GET for a one-byte
+release asset that carries nothing, so active installs can be counted.
 
 What gets *stored* is metadata only: token counts, tool names, event types, and
 sha256/16-hashed paths. No prompt text, no code bodies, no file contents, no raw paths.
@@ -49,12 +51,26 @@ sha256/16-hashed paths. No prompt text, no code bodies, no file contents, no raw
 charset-constrained with no `/`, so path-shaped values structurally cannot parse; anything
 else is dropped at ingest. Free-text fields in events are a **bug**, not a feature request.
 
-The **one** thing that ever leaves the process is the Adaptive Coach's prompt to a *local*
-`claude -p` call (see below), and its payload is zod-whitelisted to numbers, rates, and
-catalog ids. `packages/core/test/privacy.test.ts` asserts this — including a test that no
-file in `core/src` contains a `fetch`/WebSocket/`node:http` call. Any PR that widens what
-gets stored, or adds a second outbound path, must update that suite and be treated as a
-breaking design change.
+Exactly **two** things ever leave the process, and both are pinned by tests:
+
+1. The Adaptive Coach's prompt to a *local* `claude -p` call (see below). Its payload is
+   zod-whitelisted to numbers, rates, and catalog ids. This is the only outbound path in
+   the binary.
+2. The **daily ping** — REMY's entire analytics layer. Once per machine per UTC day, the
+   launcher (`bin/remy`, POSIX sh — never the binary) GETs
+   `releases/download/v<version>/ping-<os>-<arch>` from this repo's GitHub release: a
+   one-byte asset. No payload, no id, no cookie, nothing from any session; GitHub's
+   download counter for that asset is the count of machines that ran that version on
+   that platform that day, and `bun run analytics` reads it back. The request is
+   detached (a hook only does a `mkdir`), only a real install pings (never a `dev`
+   build), and it is off with `REMY_ANALYTICS=0` or `remy analytics --off`.
+
+`packages/core/test/privacy.test.ts` asserts both: no `fetch`/WebSocket/`node:http` call
+anywhere in `core/src` or `cli/src`, and every `curl` in the launcher downloads to a file,
+sends no body or header, and addresses only the release URL. `cli/test/launcher.test.ts`
+pins once-a-day, the kill switches, and the exact request. Any PR that widens what gets
+stored, puts anything into the ping, or adds a third outbound path must update those
+suites and be treated as a breaking design change.
 
 ## Repo layout
 
@@ -171,12 +187,17 @@ Releasing = tag the version in `plugin.json` (`git tag v0.3.0 && git push origin
 `.github/workflows/release.yml` refuses a tag that disagrees with the manifest (the
 launcher builds its URL from that manifest, so a mismatch = every install silently finds
 nothing), cross-compiles darwin-arm64/x64 + linux-x64/arm64, and publishes the assets plus
-`checksums.txt`. `ci.yml` runs typecheck + tests + `sh -n` on the launcher for every push.
+`checksums.txt`. A release build (`--channel release --out …`) also writes a one-byte
+`ping-<target>` next to each binary — the asset the launcher's daily ping fetches — so the
+upload must include it or that release counts nobody; `bun run analytics` reads the
+counters back (machine-days per version and platform, plus the per-day rate between its
+own snapshots in `~/.remy/analytics/`). `ci.yml` runs typecheck + tests + `sh -n` on the
+launcher for every push.
 Version lives in **one** place — `plugin.json` — and is baked into the binary via
 `--define REMY_VERSION`; `REMY_CHANNEL=release` still stamps release binaries, but
 nothing reads it anymore since the dev build badge left the statusline.
 
 **Known gaps:** the `.github/workflows/` files are not in git — the `gh` OAuth token
 lacks the `workflow` scope, so releases are cut by hand (`bun run preflight`, build four
-targets, `gh release create`) until that's granted. Windows has no launcher (the shim is
+targets, `gh release create … dist/*` — the `ping-*` files included) until that's granted. Windows has no launcher (the shim is
 POSIX sh; it exits 0 there, so hooks stay silent rather than erroring).
