@@ -271,6 +271,37 @@ export const SCENARIOS: Scenario[] = [
     expect: ["edit-thrash", "reread-churn", "no-verify", "tools-over-bash", "context-band"],
   },
   {
+    name: "noisy-tool",
+    why: "one MCP tool answered every call with ~20k tokens — the window carried all of it",
+    build: (t) => t.times(5, (b) => b.mcp("Claude_Browser", "snapshot", { resultChars: 80_000 })),
+    expect: ["noisy-tool"],
+  },
+  {
+    name: "clean: screenshots are priced by their pixels, not their base64",
+    why: "five images are ~8k tokens, not 500k — a browser session must stay silent",
+    build: (t) => t.times(5, (b) => b.mcp("Claude_Browser", "screenshot", { resultImages: 1 })),
+    expect: [],
+    forbid: ["noisy-tool"],
+  },
+  {
+    name: "read floods belong to read-in-slices, not noisy-tool",
+    why: "Read can name the file; noisy-tool must not say the same thing with less",
+    build: (t) => t.times(3, (b, i) => b.read(`big${i}.ts`, { resultChars: 40_000 })),
+    expect: ["read-in-slices"],
+    forbid: ["noisy-tool"],
+  },
+  {
+    name: "clean: one big answer is an answer",
+    why: "a single oversized result is not a habit — the median has to be big",
+    build: (t) =>
+      t
+        .mcp("docs", "search", { resultChars: 80_000 })
+        .mcp("docs", "search", { resultChars: 1_000 })
+        .mcp("docs", "search", { resultChars: 1_000 }),
+    expect: [],
+    forbid: ["noisy-tool"],
+  },
+  {
     name: "permission denials are counted, never coached",
     why: "pins today's deliberate gap: no rule reads perm_denials (see the backlog)",
     build: (t) => t.read("api.ts").edit("api.ts"),
@@ -335,6 +366,14 @@ export function snapshotFor(
     cacheExpiryWorstGapMinutes: stats.cacheExpiryWorstGapMinutes,
     redZoneTurns: stats.redZoneTurns,
     redZoneExcessTokens: stats.redZoneExcessTokens,
+    assistantTurns: stats.assistantTurns,
+    maxContextPct: stats.maxContextPct,
+    fatReads: stats.fatReads,
+    fatReadTokens: stats.fatReadTokens,
+    fatReadWorstTokens: stats.fatReadWorstTokens,
+    fatReadTargets: stats.fatReadTargets,
+    fatReadWorstTarget: stats.fatReadWorstTarget,
+    toolResultProfile: stats.toolResultProfile,
     claudeMdBytes: claudeMdBytesFor(s),
   };
 }

@@ -183,3 +183,54 @@ describe("remy init", () => {
     }
   });
 });
+
+describe("ContextProfile ingest — the sensor mod's report", () => {
+  const H = (s: string) => {
+    const { createHash } = require("node:crypto");
+    return createHash("sha256").update(s).digest("hex").slice(0, 16);
+  };
+  const profile = (sessionId = "s1") => ({
+    hook_event_name: "ContextProfile",
+    session_id: sessionId,
+    window: 200_000,
+    system_prompt_tokens: 3_000,
+    system_tools_tokens: 12_000,
+    memory_tokens: 18_000,
+    skills_tokens: 4_000,
+    agents_tokens: 500,
+    messages_tokens: 900,
+    mcp: [
+      { server: `claude_ai_${MARKER}`, tools: 30, loaded_tools: 30, tokens: 24_000 },
+      { server: "linear", tools: 8, loaded_tools: 2, tokens: 1_500 },
+    ],
+  });
+
+  test("prints nothing, hashes the server names at the door, and stores only numbers", async () => {
+    const r = await ingest(profile());
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+    const db = new Database(join(dataDir, "remy.db"), { readonly: true });
+    const rows = db.query("SELECT * FROM context_profile ORDER BY tokens DESC").all() as any[];
+    const session = db.query("SELECT * FROM sessions WHERE session_id = 's1'").get() as any;
+    db.close();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].server_hash).toBe(H(`claude_ai_${MARKER}`));
+    expect(rows[0].tokens).toBe(24_000);
+    expect(session.ctx_mcp_tokens).toBe(25_500);
+    expect(session.ctx_memory_tokens).toBe(18_000);
+    const dump = JSON.stringify({ rows, session });
+    expect(dump).not.toContain(MARKER);
+    expect(dump).not.toContain("linear");
+  });
+
+  test("a malformed report is dropped whole, and the log never echoes it", async () => {
+    const r = await ingest({ ...profile(), mcp: [{ server: "x", tools: "many", loaded_tools: 1, tokens: 1 }], window: "big" });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+    const db = new Database(join(dataDir, "remy.db"), { readonly: true });
+    expect(db.query("SELECT COUNT(*) AS c FROM context_profile").get()).toEqual({ c: 0 });
+    db.close();
+    const log = join(dataDir, "remy.log");
+    if (existsSync(log)) expect(readFileSync(log, "utf8")).not.toContain(MARKER);
+  });
+});

@@ -1,5 +1,5 @@
-import type { ToolCall } from "./transcript";
-import type { SessionRow } from "./store";
+import type { ToolCall, ToolResultProfile } from "./transcript";
+import type { McpServerProfile, SessionRow } from "./store";
 import { ModelStr, ToolNameStr } from "./schema";
 
 // Waste signatures. Deterministic — no model calls in the analysis path.
@@ -84,6 +84,26 @@ export interface SessionSnapshot {
    * `claudeMdBytes` is required. A caller that doesn't supply it gets the
    * same tip it got before, worded the same way. */
   skillBytes?: number | null;
+  /** What every tool's results weighed this session (transcript.ts) — the
+   * `noisy-tool` rule's input. Optional: a caller without it gets no such tip. */
+  toolResultProfile?: ToolResultProfile[];
+  /** The context window by category, as the sensor mod reported it (store.ts
+   * `ctx_*` columns). Attribution for `context-tax` only — it never fires
+   * anything. Absent = the mod never reported. */
+  contextCategories?: ContextCategories;
+  /** Every MCP server the mod saw, with what its schemas cost and how often
+   * this session called it (store.ts `mcpServerProfile`). `mcp-idle`'s input.
+   * Absent = the mod never reported; an empty list = no servers. */
+  mcpServers?: McpServerProfile[];
+}
+
+export interface ContextCategories {
+  system: number;
+  tools: number;
+  memory: number;
+  skills: number;
+  agents: number;
+  mcp: number;
 }
 
 export interface Finding {
@@ -122,6 +142,25 @@ const FAT_READ_TOKENS = 8_000;
 /** One big file is often exactly what was needed. Three in a session is a
  * habit with a lever, which is the same floor `reread-churn` uses. */
 const FAT_READ_MIN = 3;
+/** A tool whose TYPICAL result is this big is flooding the window, not
+ * answering a question. Measured on the local corpus: Bash results sit at a
+ * p95 of ~550 tokens and ordinary Read at a p50 of ~550, so nothing well-behaved
+ * reaches this; a full-page web fetch, an unfiltered API dump or a screenshot
+ * per step does. The median, not the worst: one big result is an answer, a big
+ * median is a habit. */
+const NOISY_RESULT_TOKENS = 6_000;
+/** Three results is the same "a habit, not an incident" floor every other
+ * tool-shaped rule uses. */
+const NOISY_MIN_CALLS = 3;
+/** Longest tool name a coaching line will carry whole. MCP names run to 64
+ * characters, and a line that is mostly a name has no room left to coach. */
+const TOOL_NAME_DISPLAY_MAX = 28;
+/** An idle server has to cost at least this much per turn before it is worth
+ * a coaching line. Measured locally: a 4-server setup parks ~7k tokens of
+ * schemas per message, a heavy one >50k (trend-watch F1); one small server is
+ * not the problem. Tool schemas defer by default now, so this counts only
+ * what is actually loaded in the window. */
+const MCP_IDLE_MIN_TOKENS = 8_000;
 const CONTEXT_TAX_BASELINE_TOKENS = 15_000;
 const SUBAGENT_MIN_DISTINCT_READS = 15;
 const SUBAGENT_MIN_CONTEXT_PCT = 70;
@@ -165,6 +204,17 @@ const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
  * string an exotic MCP server could steer. Gate it rather than trust it. */
 function safeToolName(name: string): string {
   return ToolNameStr.safeParse(name).data ?? "the same tool";
+}
+
+/** `mcp__linear__create_issue` → `linear/create_issue` — the server and the
+ * tool, which is how a developer thinks of it; a built-in stays as it is.
+ * Gated through safeToolName first, then bounded, so a 64-character server
+ * name cannot crowd the coaching out of its own line. */
+export function humanTool(name: string): string {
+  const safe = safeToolName(name);
+  const m = safe.match(/^mcp__(.+?)__(.+)$/);
+  const shown = m ? `${m[1]}/${m[2]}` : safe;
+  return shown.length > TOOL_NAME_DISPLAY_MAX ? `${shown.slice(0, TOOL_NAME_DISPLAY_MAX - 1)}…` : shown;
 }
 
 /** `claude-opus-5[1m]` → `opus-5[1m]`. Gated first for the same reason. */
@@ -317,6 +367,18 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
   // nag `applyClaudeMd` was written to avoid.
   const fat = detectFatReads(s);
   if (fat) findings.push(fat);
+
+  const noisy = detectNoisyTool(s);
+  if (noisy) findings.push(noisy);
+
+  // The specific beats the generic: `context-tax` says "your pack is heavy",
+  // `mcp-idle` says which server and what to type. One tip per incident.
+  const idle = detectMcpIdle(s);
+  if (idle) {
+    const i = findings.findIndex((f) => f.tipId === "context-tax");
+    if (i !== -1) findings.splice(i, 1);
+    findings.push(idle);
+  }
 
   applyClaudeMd(s, findings);
 
@@ -556,9 +618,59 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
       // Omitted entirely when unmeasured; the catalog's `fallbacks` supplies
       // the word, which also covers rows written before this shipped.
       ...(s.skillBytes == null ? {} : { skill_k: skillShare(s.skillBytes) }),
+      // The same again, one level sharper: when the mod has reported the
+      // window by category, the tip can say which category is the pack.
+      ...(s.contextCategories ? { biggest: biggestCategory(s.contextCategories) } : {}),
     },
     estSavingsTokens: s.firstContextTokens - CONTEXT_TAX_BASELINE_TOKENS,
     estClass: "input",
+  };
+}
+
+/** "MCP tool schemas (62k)" — the heaviest category of the startup pack, with
+ * its weight, in the words /context uses. Everything the mod reports is
+ * startup pack except messages, which is the session's own work. */
+function biggestCategory(c: ContextCategories): string {
+  const named: Array<[string, number]> = [
+    ["the system prompt", c.system],
+    ["built-in tool schemas", c.tools],
+    ["CLAUDE.md and memory files", c.memory],
+    ["skill listings", c.skills],
+    ["agent descriptions", c.agents],
+    ["MCP tool schemas", c.mcp],
+  ];
+  const [name, tokens] = named.reduce((a, b) => (b[1] > a[1] ? b : a));
+  return `${name} (${kTokens(tokens)})`;
+}
+
+// A server whose tool schemas sit in the window every turn and that the
+// session never called once. The configured half comes from the sensor mod
+// (what /context knows), the usage half from events.tool_name (free: the host
+// spells the server into every tool name), joined on a hash so no name is
+// stored. Only LOADED schemas count — the host defers tool schemas by default,
+// so a server whose tools were never searched for costs little, and blaming
+// it would be the stale F1 threshold trend-watch warned about. The largest
+// idle server is named; `context-tax` yields to this, since it is the same
+// finding with a name and a command attached.
+function detectMcpIdle(s: SessionSnapshot): Finding | null {
+  const idle = (s.mcpServers ?? []).filter((m) => m.calls === 0 && m.loadedTools > 0 && m.tokens >= MCP_IDLE_MIN_TOKENS);
+  if (idle.length === 0) return null;
+  const worst = idle.reduce((a, b) => (b.tokens > a.tokens ? b : a));
+  const turns = Math.max(1, s.assistantTurns ?? 1);
+  return {
+    tipId: "mcp-idle",
+    evidence: {
+      server_hash: worst.serverHash,
+      tokens_k: Math.max(1, Math.round(worst.tokens / 1_000)),
+      tools_clause: plural(worst.loadedTools, "tool schema", "tool schemas"),
+      turns_clause: plural(turns, "turn", "turns"),
+      idle_servers: idle.length,
+    },
+    // What an idle schema actually costs: re-read with the rest of the window
+    // on every turn, at the cache-read price. Not the first write — that is
+    // `context-tax`'s number, and this tip replaces it rather than adding to it.
+    estSavingsTokens: worst.tokens * turns,
+    estClass: "cache-read",
   };
 }
 
@@ -604,6 +716,38 @@ function detectFatReads(s: SessionSnapshot): Finding | null {
     // turn would be the inflated-estimate mistake `subagent-offload` just had
     // corrected.
     estSavingsTokens: Math.max(0, Math.round((total - count * FAT_READ_TOKENS) * 0.9)),
+    estClass: "input",
+  };
+}
+
+// One tool whose results are routinely enormous — a web fetch that returns the
+// whole page, an MCP query with no filter, a screenshot on every step. Each
+// result lands in the window whole and is carried for every turn after, the
+// same waste `read-in-slices` names for Read; this is the rule for every other
+// tool. The MEDIAN result has to be big: one oversized answer is an answer, a
+// big median is the tool's habit, and a habit has a lever (ask for less, or
+// run it in a subagent). Read itself is left to `read-in-slices`, which can
+// name the file; images are priced as the API prices them (transcript.ts), so
+// a browser session no longer trips this on base64 length alone.
+function detectNoisyTool(s: SessionSnapshot): Finding | null {
+  const profile = s.toolResultProfile ?? [];
+  const candidates = profile.filter(
+    (p) => p.name !== "Read" && p.calls >= NOISY_MIN_CALLS && p.medianTokens >= NOISY_RESULT_TOKENS,
+  );
+  if (candidates.length === 0) return null;
+  const worst = candidates.reduce((a, b) => (b.tokens > a.tokens ? b : a));
+  return {
+    tipId: "noisy-tool",
+    evidence: {
+      tool: humanTool(worst.name),
+      calls: worst.calls,
+      avg_k: Math.max(1, Math.round(worst.tokens / worst.calls / 1_000)),
+      worst_k: Math.max(1, Math.round(worst.worstTokens / 1_000)),
+      total_k: Math.max(1, Math.round(worst.tokens / 1_000)),
+    },
+    // Same shape as `read-in-slices`: only the excess over a bounded result,
+    // charged once, since the window re-reads it at cache price thereafter.
+    estSavingsTokens: Math.max(0, Math.round((worst.tokens - worst.calls * NOISY_RESULT_TOKENS) * 0.9)),
     estClass: "input",
   };
 }

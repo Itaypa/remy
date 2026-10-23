@@ -1,5 +1,8 @@
 {
-  "description": "remy telemetry + coaching (metadata-only; the binary never receives more than hook JSON)",
+  "description": "remy telemetry + coaching (metadata-only; the binary never receives more than hook JSON). `modules` is the sensor: a function-hooks module that reads the context breakdown and pipes the numbers to the same binary.",
+  "modules": [
+    "./register.ts"
+  ],
   "hooks": {
     "SessionStart": [
       {

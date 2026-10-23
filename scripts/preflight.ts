@@ -78,6 +78,13 @@ check("hooks.json and the ingest switch agree", async () => {
   const hooks = await Bun.file("packages/plugin-claude-code/hooks/hooks.json").json();
   const registered = new Set(Object.keys(hooks.hooks ?? {}));
   if (registered.size === 0) return "hooks.json registers nothing";
+  // The sensor mod (hooks.json `modules`) feeds ingest too, through the same
+  // binary and the same switch — its events are "registered" by the module's
+  // own source, which names each one as the payload's hook_event_name.
+  for (const mod of hooks.modules ?? []) {
+    const src = await Bun.file(`packages/plugin-claude-code/hooks/${String(mod).replace(/^\.\//, "")}`).text();
+    for (const m of src.matchAll(/hook_event_name:\s*"([A-Z]\w+)"/g)) registered.add(m[1]!);
+  }
 
   // Note the limit: this compares *labels*, not behaviour. A case that exists
   // but whose effect was refactored away still reads as handled, and removing
@@ -133,6 +140,19 @@ check("every event type has a writer", async () => {
   return orphans.length === 0
     ? null
     : `event type(s) with no writer in ingest: ${orphans.join(", ")} — either write them or drop them from the enum`;
+});
+
+check("the plugin validates, sensor mod included", async () => {
+  // `claude plugin validate` reads the manifest, hooks.json and the hooks
+  // module the way the engine will. A missing `claude` is a skip, not a
+  // failure: the release machine may not have it, CI has the other gates.
+  const which = await $`which claude`.nothrow().quiet();
+  if (which.exitCode !== 0) return null;
+  const out = await $`claude plugin validate packages/plugin-claude-code`.nothrow().quiet();
+  const text = out.stdout.toString() + out.stderr.toString();
+  if (out.exitCode !== 0 || !text.includes("Validation passed")) return `claude plugin validate failed: ${text.slice(-600)}`;
+  if (!text.includes("register.ts hooks:")) return "the validator did not see hooks/register.ts — is `modules` still in hooks.json?";
+  return null;
 });
 
 check("typecheck", async () => {

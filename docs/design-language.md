@@ -192,13 +192,14 @@ carries an exact number.
   second nag, not coaching. Those tips still reach the splash and `/remy`.
   Same principle at the rules layer: `context-band` doesn't file at all in
   a session where auto-compact already fired — one tip per incident.
-- **The mascot appears once, not always.** The full halftone rat
-  (`packages/plugin-claude-code/art/rat.txt`, 62 lines) is the README hero and
-  the session-start welcome — but the welcome fires **once per version**
-  (keyed on `sync_state.welcome_version`, so an upgrade re-introduces him and
-  nothing else does), downsampled to 16 lines. Every routine session gets the
-  three-line mark with the stats and tip beside it, tail running into the tip
-  line. A session starts far more often than it feels like it does (`/clear`,
+- **The mascot appears once, not always.** The mouse with the sign
+  (`packages/plugin-claude-code/art/remy.txt`, Joan G. Stark's jgs mouse with
+  the sign re-lettered "TOKENS BEING SAVED", 14 lines) is the README hero and
+  the session-start welcome, byte for byte — `ui.test.ts` asserts the embedded
+  copy equals the file. The welcome fires **once per version** (keyed on
+  `sync_state.welcome_version`, so an upgrade re-introduces him and nothing
+  else does). Every routine session gets his face — the four-line crop of the
+  same art — with the stats and tip beside it, the nose on the tip line. A session starts far more often than it feels like it does (`/clear`,
   resume, `/reload-plugins`); art on every one of them stops being art and
   becomes scrollback. Same reasoning as the noise budget, applied to pixels
   instead of words.

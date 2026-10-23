@@ -120,6 +120,19 @@ describe("adaptive coach — the controls over the one outbound path", () => {
     expect(backendCalls()).toBe(0);
   });
 
+  test("the model is a persisted choice with an env override, and the status line says which", async () => {
+    expect(await remy(["adapt", "--status"])).toContain("model: sonnet");
+    expect(await remy(["adapt", "--model", "opus"])).toContain("model set to opus");
+    expect(await remy(["adapt", "--status"])).toContain("model: opus");
+    // The env var wins for one invocation without touching the stored choice.
+    expect(await remy(["adapt", "--status"], { REMY_ADAPT_MODEL: "haiku" })).toContain("model: haiku");
+    expect(await remy(["adapt", "--status"])).toContain("model: opus");
+    // A value that is not a model string is refused, not stored.
+    expect(await remy(["adapt", "--model", "../../etc; rm -rf"])).toContain("not a model alias");
+    expect(await remy(["adapt", "--status"])).toContain("model: opus");
+    expect(await remy(["adapt", "--model", "default"])).toContain("reset to the default (sonnet)");
+  });
+
   test("a backend that fails degrades to silence, not to an error", async () => {
     seedSessions(5);
     const out = await remy(["adapt"], { REMY_ADAPT_CMD: "sh -c exit1-does-not-exist" });

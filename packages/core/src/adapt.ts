@@ -18,6 +18,37 @@ import type { SessionRow } from "./store";
 const TIP_ID = z.string().refine((id) => id in TIPS, "unknown tip id");
 /** Model ids are charset-gated at ingest; re-assert here (no "/", no spaces). */
 const MODEL_ID = z.string().regex(/^[A-Za-z0-9.:_-]{1,64}$/);
+
+/** Which model the headless call runs on. An ALIAS, not a pinned id, so the
+ * call tracks whatever the host resolves it to (today: Sonnet 5.5 on the
+ * Anthropic API) without a release here each time a model ships.
+ *
+ * Sonnet, not Haiku, since 0.4.0. The job is one judgment call a day — pick
+ * the catalog tip a 14-day metadata profile actually supports and write one
+ * honest sentence about it — and at ~2k tokens in, ~100 out, once a day, the
+ * price difference rounds to nothing on any plan (and is rate-limit headroom,
+ * not dollars, on a subscription). What does not round to nothing is a tip
+ * chosen badly: it sits in the one active slot for days. Haiku stays as the
+ * fallback the CLI retries on when the first choice is unavailable. */
+export const ADAPT_DEFAULT_MODEL = "sonnet";
+export const ADAPT_FALLBACK_MODEL = "haiku";
+
+/** The alias or id to run on: an explicit choice (`REMY_ADAPT_MODEL`, or
+ * `remy adapt --model` persisted in sync_state) when it is a well-formed
+ * model string, else the default. Never a free string — the value goes on a
+ * command line. */
+export function resolveAdaptModel(explicit: string | null | undefined, stored: string | null | undefined): string {
+  for (const candidate of [explicit, stored]) {
+    const ok = MODEL_ID.safeParse(candidate?.trim());
+    if (ok.success && ok.data.length > 0) return ok.data;
+  }
+  return ADAPT_DEFAULT_MODEL;
+}
+
+/** The headless call, argv by argv: prompt on stdin, one turn, JSON out. */
+export function adaptCommand(model: string): string[] {
+  return ["claude", "-p", "--output-format", "json", "--model", model, "--max-turns", "1"];
+}
 const COUNT = z.number().int().min(0);
 const RATE = z.number().min(0).max(1);
 

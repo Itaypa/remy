@@ -5,9 +5,12 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   activeTip,
+  adaptCommand,
+  ADAPT_FALLBACK_MODEL,
   analyzeHabits,
   analyzeSession,
   applyAdaptResponse,
+  resolveAdaptModel,
   buildAdaptPayload,
   buildAdaptPrompt,
   claudeMdBytes,
@@ -42,6 +45,10 @@ import {
   insertEvent,
   latestSessionForCwd,
   logError,
+  mcpServerProfile,
+  mcpServerSegments,
+  sanitizeContextProfile,
+  setContextProfile,
   markShown,
   openDb,
   parseTranscriptFile,
@@ -58,6 +65,7 @@ import {
   type TipRow,
 } from "@ccpp/core";
 import {
+  ART,
   ansi,
   bar,
   cacheField,
@@ -82,7 +90,7 @@ import {
   spinnerEnabled,
   syncSpinnerTips,
 } from "./spinner";
-import { fileHashesIn, fileVar, resolveTargets } from "./resolve";
+import { fileHashesIn, fileVar, resolveMcpServers, resolveTargets, serverHashesIn } from "./resolve";
 
 // Baked in by scripts/build-plugin.ts from the plugin manifest — one version
 // number for the plugin, the binary, and the release asset names.
@@ -251,6 +259,33 @@ async function ingest(): Promise<void> {
       db.query(`UPDATE sessions SET perm_denials = perm_denials + 1 WHERE session_id = ?`).run(sessionId);
       break;
     }
+    // The sensor mod's report (hooks/register.ts) — /context as numbers, sent
+    // down a local pipe into this process. Server names arrive as the wire
+    // segment the host puts in every tool name and are hashed HERE, exactly
+    // as file paths are, before the whitelist sees them; nothing on this
+    // branch prints, since nothing is listening.
+    case "ContextProfile": {
+      const mcp = Array.isArray(payload.mcp) ? payload.mcp : [];
+      const profile = sanitizeContextProfile({
+        session_id: sessionId,
+        ts: now,
+        window: payload.window,
+        system_prompt_tokens: payload.system_prompt_tokens,
+        system_tools_tokens: payload.system_tools_tokens,
+        memory_tokens: payload.memory_tokens,
+        skills_tokens: payload.skills_tokens,
+        agents_tokens: payload.agents_tokens,
+        messages_tokens: payload.messages_tokens,
+        mcp: mcp
+          .filter((m: any) => m && typeof m === "object" && typeof m.server === "string" && m.server.length > 0)
+          .map((m: any) => ({ server_hash: hashPath(m.server), tools: m.tools, loaded_tools: m.loaded_tools, tokens: m.tokens })),
+      });
+      if (profile) {
+        upsertSession(db, { session_id: sessionId, ts: now, cwd_hash: cwdHash });
+        setContextProfile(db, profile);
+      }
+      break;
+    }
     case "PreCompact": {
       const trigger = payload.trigger === "auto" ? "auto" : "manual";
       upsertSession(db, { session_id: sessionId, ts: now, cwd_hash: cwdHash });
@@ -380,7 +415,15 @@ function tipContext(
 ): { session: SessionRow | null; files: Map<string, string> } {
   const session = sessionId ? getSession(db, sessionId) : null;
   const dir = typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd();
-  const files = resolveTargets(fileHashesIn(tips.map((t) => t.evidence)), dir);
+  const blobs = tips.map((t) => t.evidence);
+  const files = resolveTargets(fileHashesIn(blobs), dir);
+  // One map for both kinds of name: a server hash resolves from the wire
+  // segments this machine has called plus its MCP config, the same "only for
+  // someone who already has it" contract as a file.
+  const serverHashes = serverHashesIn(blobs);
+  if (serverHashes.length > 0) {
+    for (const [h, name] of resolveMcpServers(serverHashes, dir, mcpServerSegments(db))) files.set(h, name);
+  }
   return { session, files };
 }
 
@@ -481,6 +524,22 @@ async function analyzeTranscript(
     fatReadWorstTokens: stats.fatReadWorstTokens,
     fatReadTargets: stats.fatReadTargets,
     fatReadWorstTarget: stats.fatReadWorstTarget,
+    toolResultProfile: stats.toolResultProfile,
+    // From the sensor mod, when it has reported; absent otherwise, and the
+    // two rules that read these stay quiet rather than guess.
+    ...(row?.ctx_system_tokens == null
+      ? {}
+      : {
+          contextCategories: {
+            system: row.ctx_system_tokens ?? 0,
+            tools: row.ctx_tools_tokens ?? 0,
+            memory: row.ctx_memory_tokens ?? 0,
+            skills: row.ctx_skills_tokens ?? 0,
+            agents: row.ctx_agents_tokens ?? 0,
+            mcp: row.ctx_mcp_tokens ?? 0,
+          },
+          mcpServers: mcpServerProfile(db, sessionId),
+        }),
     // NULL when SessionStart never ran for this id (plugin installed
     // mid-session, or a --continue into an older session) — the rules read
     // that as "unknown" and stay quiet.
@@ -546,12 +605,30 @@ async function adapt(args: string[]): Promise<void> {
     console.log("🤖 adaptive coaching: OFF — deterministic coaching continues as usual");
     return;
   }
+  // `--model <alias-or-id>` persists the choice; `--model default` clears it.
+  // The value is gated by the same charset the payload gates model ids with,
+  // because it ends up on a command line.
+  const modelFlag = args.indexOf("--model");
+  if (modelFlag !== -1) {
+    const wanted = args[modelFlag + 1] ?? "";
+    if (wanted === "default" || wanted === "") {
+      setSyncState(db, "adapt_model", "");
+      console.log(`🤖 adaptive coaching: model reset to the default (${adaptModel(db)})`);
+    } else if (resolveAdaptModel(wanted, null) === wanted) {
+      setSyncState(db, "adapt_model", wanted);
+      console.log(`🤖 adaptive coaching: model set to ${wanted} — tracks whatever the claude CLI resolves it to`);
+    } else {
+      console.log(`🤖 "${wanted.slice(0, 40)}" is not a model alias or id — try sonnet, opus, haiku, or a full id`);
+    }
+    return;
+  }
   const last = getSyncState(db, "last_adapt_at");
   if (args.includes("--status")) {
     console.log(
       `🤖 adaptive coaching: ${adaptEnabled(db) ? "on" : "off"}` +
+        ` · model: ${adaptModel(db)}` +
         (last ? ` · last analyzed ${hoursAgo(last)}h ago` : " · never run") +
-        " · toggle: remy adapt --on/--off",
+        " · toggle: remy adapt --on/--off · model: remy adapt --model <alias>",
     );
     return;
   }
@@ -573,7 +650,7 @@ async function adapt(args: string[]): Promise<void> {
     if (!quiet) console.log("🤖 no sessions in the last 14 days — nothing to analyze yet");
     return;
   }
-  const stdout = await runAdaptBackend(buildAdaptPrompt(payload));
+  const stdout = await runAdaptBackend(buildAdaptPrompt(payload), adaptModel(db));
   if (stdout == null) {
     if (!quiet) console.log("🤖 claude CLI unavailable — skipped (silence for good with: remy adapt --off)");
     return;
@@ -588,14 +665,30 @@ async function adapt(args: string[]): Promise<void> {
   }
 }
 
-/** Headless claude CLI call — prompt on stdin, JSON out. COACH_ADAPT_CMD
- * overrides the command (test/e2e stub). Returns null on any failure: the
- * adaptive layer degrades to plain deterministic coaching. */
-async function runAdaptBackend(prompt: string): Promise<string | null> {
+/** The model the next call runs on: `REMY_ADAPT_MODEL`, else the persisted
+ * `remy adapt --model` choice, else the default (core/src/adapt.ts). */
+function adaptModel(db: ReturnType<typeof openDb>): string {
+  return resolveAdaptModel(envVar("ADAPT_MODEL"), getSyncState(db, "adapt_model"));
+}
+
+/** Headless claude CLI call — prompt on stdin, JSON out. REMY_ADAPT_CMD
+ * overrides the whole command (test/e2e stub; the model is not appended, so
+ * a `cat <file>` stub keeps working). Returns null on any failure: the
+ * adaptive layer degrades to plain deterministic coaching.
+ *
+ * One retry, on the fallback model, when the real CLI fails on the chosen
+ * one — an alias that does not resolve on this provider, a model the account
+ * cannot reach — so a bad choice costs one wasted spawn, not the day's
+ * analysis. Never for an override: a failing stub is the thing under test. */
+async function runAdaptBackend(prompt: string, model: string): Promise<string | null> {
   const override = envVar("ADAPT_CMD");
-  const cmd = override
-    ? override.split(" ").filter(Boolean)
-    : ["claude", "-p", "--output-format", "json", "--model", "haiku", "--max-turns", "1"];
+  if (override) return spawnAdapt(override.split(" ").filter(Boolean), prompt);
+  const first = await spawnAdapt(adaptCommand(model), prompt);
+  if (first !== null || model === ADAPT_FALLBACK_MODEL) return first;
+  return spawnAdapt(adaptCommand(ADAPT_FALLBACK_MODEL), prompt);
+}
+
+async function spawnAdapt(cmd: string[], prompt: string): Promise<string | null> {
   try {
     const proc = Bun.spawn(cmd, { stdin: Buffer.from(prompt), stdout: "pipe", stderr: "ignore" });
     const killer = setTimeout(() => proc.kill(), 90_000);
@@ -838,10 +931,9 @@ function report(args: string[]): void {
   const adaptLast = getSyncState(db, "last_adapt_at");
   // The report is the one surface with a generous budget, so it resolves
   // filenames for every tip it is about to print, not just the active one.
-  const files = resolveTargets(
-    fileHashesIn([...tips, ...(active ? [active] : [])].map((t) => t.evidence)),
-    process.cwd(),
-  );
+  const blobs = [...tips, ...(active ? [active] : [])].map((t) => t.evidence);
+  const files = resolveTargets(fileHashesIn(blobs), process.cwd());
+  for (const [h, name] of resolveMcpServers(serverHashesIn(blobs), process.cwd(), mcpServerSegments(db))) files.set(h, name);
   console.log(
     renderReport({
       session,
@@ -967,9 +1059,10 @@ function init(args: string[]): void {
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   console.log(
     [
-      "  ,__,",
-      " (o,o)       REMY statusline installed",
-      ` (")_(")~~~  → ${settingsPath} (refresh every ${refreshInterval}s)`,
+      `${ART[0]}`,
+      `${ART[1]}   REMY statusline installed`,
+      `${ART[2]}   → ${settingsPath} (refresh every ${refreshInterval}s)`,
+      `${ART[3]}`,
       "",
       '     ⚙ also: "remy spinner" puts your tip under Claude Code\'s spinner',
       "",
@@ -1045,7 +1138,7 @@ function help(): void {
       "  init         install the statusline into .claude/settings.json (--global for user-wide · --refresh <seconds>, default 1)",
       "  spinner      put your coaching line under Claude Code's spinner (--off to hand it back · --status)",
       "  links        make statusline actions clickable — installs the remy:// click handler (macOS)",
-      "  adapt        run the adaptive analyzer now (--on/--off/--status · --force to bypass the daily budget)",
+      "  adapt        run the adaptive analyzer now (--on/--off/--status · --model <alias> · --force to bypass the daily budget)",
     ].join("\n"),
   );
 }

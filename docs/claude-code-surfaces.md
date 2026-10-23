@@ -8,6 +8,8 @@ is the only door into the store.
 
 Seven events are registered, all piping their stdin JSON to `remy ingest`.
 Common fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name`.
+An eighth, `ContextProfile`, is not a host event: the sensor mod (below)
+sends it down the same pipe.
 
 | Event | Extra fields we use | What ingest does |
 |---|---|---|
@@ -40,8 +42,41 @@ the raw input, since V8's `JSON.parse` SyntaxError embeds a fragment of it.
 
 `SessionEnd` may also spawn a **detached** `remy adapt --auto` child (once a
 day at most, stdio ignored) — the hook process exits before the local
-`claude -p` call begins. The statusline never spawns anything, and nothing
+`claude -p --model sonnet` call begins (the alias is the default; `REMY_ADAPT_MODEL`
+or `remy adapt --model` changes it, and a failure retries once on `haiku`). The statusline never spawns anything, and nothing
 here ever touches the network.
+
+## The sensor mod (`hooks/register.ts`, `hooks.json` → `modules`)
+
+Claude Code's function hooks let a plugin ship a TypeScript module that runs
+**inside** the host, with an engine interface (`$`) that can read the session,
+draw panes, call models and run processes. REMY ships exactly one such module,
+and it is a sensor, not a surface: it reads the one thing no classic hook or
+statusline payload carries — `$.session.usage({ breakdown: "summary" })`, the
+context window by category as `/context` draws it, including every MCP tool's
+schema weight, its server, and whether the schema is loaded or deferred — and
+pipes the **numbers** into `remy ingest` as a `ContextProfile` payload over a
+local pipe. Server names travel as the wire segment the host puts in every
+tool name (`mcp__<server>__<tool>` → `<server>`) and are hashed at ingest the
+way file paths are, before the whitelist (`ContextProfileSchema`, strict) sees
+them. The mod keeps nothing, draws nothing, and calls no model;
+`privacy.test.ts` asserts its source touches nothing on `$` but
+`session.usage`, `session.id`, `plugin.root` and `process.run`.
+
+Cadence: the first completed turn, then every tenth. `"summary"` is local
+estimation and costs nothing; `"full"` would send token-count API requests
+and is never used. A host without function hooks ignores `modules` and the
+two rules that read this data (`mcp-idle`, and `context-tax`'s `{biggest}`
+attribution) stay on their fallbacks.
+
+Loading: an installed plugin's module runs from the next session. A folder
+the session hot-reloads (the dogfood install from the repo marketplace, a
+`--plugin-dir`) asks the person once — "Turn on the mods Claude writes in this
+session?" — and the engine then lays its type declarations in
+`.claude-plugin/types/` (gitignored by the engine itself). The API is early
+access; the module reads only fields that exist and treats a missing breakdown
+as "no report". `claude plugin validate packages/plugin-claude-code` is a
+preflight gate and lists what the module hooks and calls.
 
 ## Stop-hook nudges
 

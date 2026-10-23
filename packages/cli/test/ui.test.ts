@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { BRAND, HINTS, TIPS, type SessionRow, type TipRow } from "@ccpp/core";
-import { bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { ART, WELCOME_ART, bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -356,15 +358,47 @@ describe("cacheField — the one number no hook could ever tell you", () => {
 describe("splash — the welcome is a moment, not wallpaper", () => {
   const week = { sessions: 3, tokensIn: 1, tokensOut: 1, cacheRead: 0, cost: 0, planSessions: 0, autoCompacts: 0 };
 
-  test("the full rat only shows up on a welcome", () => {
+  test("the whole mouse only shows up on a welcome", () => {
     const welcome = splash({ version: "0.2.0", week, tip: null, welcome: true });
     const routine = splash({ version: "0.2.0", week, tip: null });
-    // The halftone art is many lines of @ and #; the everyday mark is three.
+    // The welcome carries the sign; the everyday mark is his face, four lines.
     expect(welcome.split("\n").length).toBeGreaterThan(15);
-    expect(welcome).toContain("@@@");
-    expect(routine.split("\n")).toHaveLength(3);
-    expect(routine).not.toContain("@@@");
-    expect(routine).toContain("(o,o)");
+    expect(welcome).toContain("T O K E N S");
+    expect(welcome).toContain("jgs");
+    expect(routine.split("\n")).toHaveLength(4);
+    expect(routine).not.toContain("T O K E N S");
+    expect(routine).toContain("66");
+  });
+
+  test("the welcome art IS art/remy.txt — the README hero and the splash cannot drift", () => {
+    // The old welcome was a hand-downsampled copy of the hero that nothing
+    // kept in sync. Now the file is the source and the array is asserted
+    // against it byte for byte.
+    const file = readFileSync(
+      join(import.meta.dir, "..", "..", "plugin-claude-code", "art", "remy.txt"),
+      "utf8",
+    ).replace(/\n$/, "");
+    expect(WELCOME_ART.join("\n")).toBe(file);
+    // And the everyday face is a crop of the same art, not a second drawing.
+    for (const [i, line] of ART.entries()) {
+      expect(WELCOME_ART[i + 1]!.slice(9)).toBe(line.trimEnd());
+    }
+  });
+
+  test("the sign is a rectangle — every row's right border lands in one column", () => {
+    // Re-lettering the sign widened it by two columns; a row left at the old
+    // width would hang its border in the wrong place.
+    const rows = WELCOME_ART.slice(6, 10);
+    const edge = rows[0]!.length - 1;
+    for (const i of [0, 2, 3]) {
+      expect(rows[i]!.length - 1, `row ${i} width`).toBe(edge);
+      expect(rows[i]![edge]).toBe("|");
+    }
+    // The second row hangs the sign on its nail: "()" where the border goes.
+    expect(rows[1]!.slice(edge)).toBe("()");
+    // The top edge stops one short of the corner, the bottom edge reaches it.
+    expect(WELCOME_ART[5]!.length - 1).toBe(edge - 1);
+    expect(WELCOME_ART[10]!.length - 1).toBe(edge);
   });
 
   test("both forms still carry the version, the week, and the tip line", () => {

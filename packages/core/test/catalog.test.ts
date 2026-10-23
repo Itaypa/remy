@@ -24,9 +24,11 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
     shell: "18 shell runs",
     bash_mix: "9 git, 4 file reads",
   },
-  "context-tax": { pct: 48, first_tokens: 96_000, first_ctx: "96k", skill_k: "~2.5k tokens" },
+  "context-tax": { pct: 48, first_tokens: 96_000, first_ctx: "96k", skill_k: "~2.5k tokens", biggest: "MCP tool schemas (62k)" },
+  "mcp-idle": { server: "claude_ai_Gmail", tokens_k: 24, tools_clause: "30 tool schemas", turns_clause: "41 turns", idle_servers: 2 },
   "subagent-offload": { reads: 42, ctx_pct: 95 },
   "read-in-slices": { count: 5, worst_k: 118, total_k: 640, file: "packages/cli/src/index.ts" },
+  "noisy-tool": { tool: "Claude_Browser/snapshot", calls: 12, avg_k: 20, worst_k: 48, total_k: 240 },
   "model-fit": { n: 12, total: 20, tier: "opus", model: "opus-5[1m]" },
   "tools-over-bash": { count: 42, bash_total: 420, tool_reads: 132 },
   "claude-md-missing": { files: 8, worst: 12, file: "packages/core/src/rules.ts" },
@@ -161,6 +163,8 @@ describe("tip catalog", () => {
     "edit-thrash": { edits: 6, rereads: 3, next: 7 }, // EDIT_THRASH_MIN_EDITS / _CYCLES
     "no-verify": { edits: 4 }, // NO_VERIFY_MIN_EDITS
     "read-in-slices": { count: 3 }, // FAT_READ_MIN
+    "noisy-tool": { calls: 3, avg_k: 6 }, // NOISY_MIN_CALLS / NOISY_RESULT_TOKENS
+    "mcp-idle": { tokens_k: 8 }, // MCP_IDLE_MIN_TOKENS
     "subagent-offload": { reads: 15 }, // SUBAGENT_MIN_DISTINCT_READS
     "tools-over-bash": { count: 6, bash_total: 6 }, // BASH_READ_MIN
     "context-band": { turns: 3, total_turns: 3 }, // RED_ZONE_MIN_TURNS

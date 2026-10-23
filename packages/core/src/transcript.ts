@@ -13,6 +13,17 @@ export interface ToolCall {
   bashClass?: BashClass;
 }
 
+/** What one tool's results weighed over the session — a count and sizes,
+ * never the results themselves. `name` is the raw transcript tool name (gated
+ * by the rules engine before it reaches any evidence). */
+export interface ToolResultProfile {
+  name: string;
+  calls: number;
+  tokens: number;
+  worstTokens: number;
+  medianTokens: number;
+}
+
 export interface TranscriptStats {
   model: string | null;
   totals: TokenUsage;
@@ -60,6 +71,9 @@ export interface TranscriptStats {
    * Tracked separately from `fatReadTargets` (a Set, so unordered) because the
    * tip cites the worst offender by name and a set has no worst. */
   fatReadWorstTarget: string | null;
+  /** Every tool that returned a result, with what those results weighed —
+   * the `noisy-tool` rule's input. Sorted by total tokens, largest first. */
+  toolResultProfile: ToolResultProfile[];
   /** Reasoning-effort mix across main-chain turns, as counts only — never the
    * value itself, so no new enum reaches the storage whitelist. `effortTurns`
    * is every turn that declared one, so a gap between it and max+high is how
@@ -100,7 +114,33 @@ const BYTES_PER_TOKEN = 4;
  * for. Local `Read` results sit at a p50 of ~2,200 characters, so this is far
  * above ordinary use, and far below the fat tail (p95 ~118k characters). */
 const FAT_READ_TOKENS = 8_000;
+/** What an image block costs the window. The API prices an image by its
+ * pixels — (width × height) / 750, capped by the 1568px resize — not by the
+ * base64 that encodes it, which is ~100× larger. Sizing a screenshot by its
+ * base64 length is what made the browser MCP look like a 100k-token offender
+ * and got every non-Read tool excluded from result sizing (S17). The cap is
+ * the honest ceiling: a full-size screenshot is about this, a thumbnail less. */
+const IMAGE_TOKENS = 1_600;
 const RED_ZONE_BASELINE_PCT = 0.6;
+
+/** How many tokens a tool_result's content weighs — text at chars/4, images
+ * at their pixel-priced ceiling, anything else by its JSON length. A number
+ * comes out; the content never does. */
+export function resultTokens(content: unknown): number {
+  if (content == null) return 0;
+  if (typeof content === "string") return Math.round(content.length / BYTES_PER_TOKEN);
+  if (Array.isArray(content)) {
+    let chars = 0;
+    let images = 0;
+    for (const block of content) {
+      if (block && typeof block === "object" && (block as any).type === "image") images += 1;
+      else if (block && typeof block === "object" && typeof (block as any).text === "string") chars += (block as any).text.length;
+      else chars += JSON.stringify(block ?? null).length;
+    }
+    return Math.round(chars / BYTES_PER_TOKEN) + images * IMAGE_TOKENS;
+  }
+  return Math.round(JSON.stringify(content).length / BYTES_PER_TOKEN);
+}
 
 export function contextLimit(): number {
   const raw = Number(envVar("CONTEXT_LIMIT"));
@@ -285,6 +325,8 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
   let fatReadWorstTokens = 0;
   let fatReadWorstTarget: string | null = null;
   const fatReadTargetSet = new Set<string>();
+  /** Per tool name, the token weight of every result it returned. */
+  const resultSizes = new Map<string, number[]>();
   let effortTurns = 0;
   let effortMaxTurns = 0;
   let effortHighTurns = 0;
@@ -374,17 +416,15 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
         // file arriving where a slice was asked for is the largest tool-shaped
         // waste in the local corpus: `Read` results run to 471k characters,
         // about 118k tokens, which the window then carries for every turn
-        // after. Scoped to Read on purpose; the browser MCP's results are
-        // base64 images, enormous and not a user's choice.
-        if (call?.name === "Read") {
-          const len =
-            typeof block.content === "string"
-              ? block.content.length
-              : block.content == null
-                ? 0
-                : JSON.stringify(block.content).length;
-          const tokens = Math.round(len / BYTES_PER_TOKEN);
-          if (tokens >= FAT_READ_TOKENS) {
+        // after. Every tool is weighed (the `noisy-tool` rule needs the whole
+        // table); images are priced as the API prices them (resultTokens), so
+        // a screenshot no longer reads as 100k tokens of base64.
+        if (call) {
+          const tokens = resultTokens(block.content);
+          const sizes = resultSizes.get(call.name) ?? [];
+          sizes.push(tokens);
+          resultSizes.set(call.name, sizes);
+          if (call.name === "Read" && tokens >= FAT_READ_TOKENS) {
             fatReads += 1;
             fatReadTokens += tokens;
             if (tokens > fatReadWorstTokens) {
@@ -495,6 +535,18 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
 
   const contextTokens = contextNow ?? 0;
   const toolCalls = toolOrder.map((t) => t.call);
+  const toolResultProfile: ToolResultProfile[] = [...resultSizes.entries()]
+    .map(([name, sizes]) => {
+      const sorted = [...sizes].sort((a, b) => a - b);
+      return {
+        name,
+        calls: sizes.length,
+        tokens: sizes.reduce((a, b) => a + b, 0),
+        worstTokens: sorted[sorted.length - 1] ?? 0,
+        medianTokens: sorted[Math.floor(sorted.length / 2)] ?? 0,
+      };
+    })
+    .sort((a, b) => b.tokens - a.tokens);
   return {
     model: dominantModel(mainTurns) ?? model,
     totals,
@@ -518,6 +570,7 @@ export function parseTranscript(text: string, limit = contextLimit()): Transcrip
     fatReadWorstTokens,
     fatReadWorstTarget,
     fatReadTargets: [...fatReadTargetSet],
+    toolResultProfile,
     effortTurns,
     effortMaxTurns,
     effortHighTurns,

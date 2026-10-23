@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext"],
+    "lib": [
+      "ESNext"
+    ],
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -12,10 +14,21 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["bun"],
+    "types": [
+      "bun"
+    ],
     "paths": {
-      "@ccpp/core": ["./packages/core/src/index.ts"]
+      "@ccpp/core": [
+        "./packages/core/src/index.ts"
+      ]
     }
   },
-  "include": ["packages", "scripts"]
+  "include": [
+    "packages",
+    "scripts"
+  ],
+  "exclude": [
+    "packages/plugin-claude-code/hooks",
+    "**/node_modules"
+  ]
 }

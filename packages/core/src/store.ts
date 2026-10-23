@@ -3,8 +3,8 @@ import { mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envVar } from "./env";
-import { Hash16, IsoTs, ModelStr } from "./schema";
-import type { SessionEvent } from "./schema";
+import { Hash16, IsoTs, ModelStr, hashPath } from "./schema";
+import type { ContextProfile, SessionEvent } from "./schema";
 
 /** `~/.remy`, unless an install predates the rename — then its `~/.coach`
  * stays exactly where it is. Moving a live SQLite database (WAL files, hooks
@@ -194,6 +194,28 @@ function migrate(db: Database): void {
   addColumnIfMissing(db, "sessions", "cache_ttl_ms", "cache_ttl_ms INTEGER");
   addColumnIfMissing(db, "sessions", "cache_anchor_at", "cache_anchor_at TEXT");
   addColumnIfMissing(db, "sessions", "cache_model", "cache_model TEXT");
+  // The context window by category, as the sensor mod reads it off the host
+  // (`$.session.usage({ breakdown })` — /context as data). Numbers only, and
+  // NULL = the mod never reported (older host, mods off, or a session that
+  // ended before its first turn completed), which the rules read as "unknown".
+  for (const col of ["system", "tools", "memory", "skills", "agents", "mcp", "messages"]) {
+    addColumnIfMissing(db, "sessions", `ctx_${col}_tokens`, `ctx_${col}_tokens INTEGER`);
+  }
+  // Per MCP server: what its tool schemas cost the window this session, and
+  // how many of its tools were actually loaded (schemas defer by default). The
+  // server is a 16-hex hash of the wire segment the host puts in every tool
+  // name (`mcp__<server>__<tool>`) — so `events.tool_name` can be re-hashed to
+  // tell an idle server from a used one, and resolve.ts can name it at render
+  // time the way it names a file. The name itself is never stored.
+  db.run(`CREATE TABLE IF NOT EXISTS context_profile (
+    session_id TEXT NOT NULL,
+    server_hash TEXT NOT NULL,
+    tokens INTEGER NOT NULL,
+    tools INTEGER NOT NULL,
+    loaded_tools INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    PRIMARY KEY (session_id, server_hash)
+  )`);
   // Generic local kv: tip throttles, spinner ownership, welcome_version,
   // the adaptive analyzer's clock. Named for a sync that no longer exists —
   // kept as-is so an existing ~/.remy/remy.db upgrades without a migration.
@@ -348,6 +370,15 @@ export interface SessionRow {
   cache_ttl_ms: number | null;
   cache_anchor_at: string | null;
   cache_model: string | null;
+  /** The context window by category, from the sensor mod (local-only).
+   * NULL = never reported. */
+  ctx_system_tokens: number | null;
+  ctx_tools_tokens: number | null;
+  ctx_memory_tokens: number | null;
+  ctx_skills_tokens: number | null;
+  ctx_agents_tokens: number | null;
+  ctx_mcp_tokens: number | null;
+  ctx_messages_tokens: number | null;
 }
 
 export interface TipRow {
@@ -487,6 +518,92 @@ export function setEffortMix(db: Database, sessionId: string, s: unknown): void 
     `UPDATE sessions SET effort_turns = ?, effort_max_turns = ?, effort_high_turns = ?, effort_max_out = ?
      WHERE session_id = ?`,
   ).run(...(ok ? vals : [null, null, null, null]), sessionId);
+}
+
+/** Record the sensor mod's context profile. The argument has ALREADY passed
+ * `sanitizeContextProfile` — this takes the parsed type, not `unknown`, so a
+ * caller cannot reach the INSERT without going through the gate; the
+ * session_id is taken from the profile for the same reason. Replaces the
+ * previous reading (the mod reports every few turns; the latest is the truth). */
+export function setContextProfile(db: Database, profile: ContextProfile): void {
+  const sid = profile.session_id;
+  db.query(
+    `UPDATE sessions SET ctx_system_tokens = ?, ctx_tools_tokens = ?, ctx_memory_tokens = ?,
+       ctx_skills_tokens = ?, ctx_agents_tokens = ?, ctx_mcp_tokens = ?, ctx_messages_tokens = ?
+     WHERE session_id = ?`,
+  ).run(
+    profile.system_prompt_tokens,
+    profile.system_tools_tokens,
+    profile.memory_tokens,
+    profile.skills_tokens,
+    profile.agents_tokens,
+    profile.mcp.reduce((a, m) => a + m.tokens, 0),
+    profile.messages_tokens,
+    sid,
+  );
+  db.query(`DELETE FROM context_profile WHERE session_id = ?`).run(sid);
+  const ins = db.query(
+    `INSERT INTO context_profile (session_id, server_hash, tokens, tools, loaded_tools, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  for (const m of profile.mcp) ins.run(sid, m.server_hash, m.tokens, m.tools, m.loaded_tools, profile.ts);
+}
+
+/** One MCP server as the rules see it: what its schemas cost this session,
+ * and how often the session actually called it. */
+export interface McpServerProfile {
+  serverHash: string;
+  tokens: number;
+  tools: number;
+  loadedTools: number;
+  calls: number;
+}
+
+/** The wire segment of an MCP tool name: `mcp__linear__create_issue` →
+ * `linear`. The host spells a server's segment the same way in every tool it
+ * exposes, which is what lets a hash of it join usage to configuration. */
+export function mcpServerSegment(toolName: string): string | null {
+  return toolName.match(/^mcp__(.+?)__/)?.[1] ?? null;
+}
+
+/** The configured half (context_profile) joined to the usage half (events):
+ * for every server the mod reported, how many `mcp__<server>__*` calls this
+ * session made. The join is on the hash, so no name is read back. */
+export function mcpServerProfile(db: Database, sessionId: string): McpServerProfile[] {
+  const rows = db
+    .query(`SELECT server_hash, tokens, tools, loaded_tools FROM context_profile WHERE session_id = ?`)
+    .all(sessionId) as Array<{ server_hash: string; tokens: number; tools: number; loaded_tools: number }>;
+  if (rows.length === 0) return [];
+  const calls = new Map<string, number>();
+  for (const ev of db
+    .query(`SELECT tool_name, COUNT(*) AS c FROM events WHERE session_id = ? AND type = 'tool_use' AND tool_name LIKE 'mcp__%' GROUP BY tool_name`)
+    .all(sessionId) as Array<{ tool_name: string; c: number }>) {
+    const seg = mcpServerSegment(ev.tool_name);
+    if (!seg) continue;
+    const h = hashPath(seg);
+    calls.set(h, (calls.get(h) ?? 0) + ev.c);
+  }
+  return rows.map((r) => ({
+    serverHash: r.server_hash,
+    tokens: r.tokens,
+    tools: r.tools,
+    loadedTools: r.loaded_tools,
+    calls: calls.get(r.server_hash) ?? 0,
+  }));
+}
+
+/** Every MCP server segment this machine has ever called, for resolve.ts to
+ * re-hash against a stored server hash — the same trick as `git ls-files`
+ * for file names: a name only ever appears for someone who already has it. */
+export function mcpServerSegments(db: Database): string[] {
+  const rows = db
+    .query(`SELECT DISTINCT tool_name FROM events WHERE tool_name LIKE 'mcp__%'`)
+    .all() as Array<{ tool_name: string }>;
+  const out = new Set<string>();
+  for (const r of rows) {
+    const seg = mcpServerSegment(r.tool_name);
+    if (seg) out.add(seg);
+  }
+  return [...out];
 }
 
 /** Machine-wide fallback for the cache TTL, so a session's very first

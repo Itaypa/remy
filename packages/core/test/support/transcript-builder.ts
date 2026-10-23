@@ -33,6 +33,12 @@ export interface CallOpts extends TurnOpts {
   /** false emits a matching tool_result with is_error — the only thing that
    * marks a call failed to the parser (PostToolUseFailure hooks do not). */
   ok?: boolean;
+  /** Emit a tool_result this many characters long (text), so result-sized
+   * rules (`read-in-slices`, `noisy-tool`) have something to weigh. */
+  resultChars?: number;
+  /** Emit a tool_result carrying this many image blocks — priced by the
+   * parser at the API's per-image ceiling, never by their base64 length. */
+  resultImages?: number;
 }
 
 /** A turn that costs almost nothing: keeps context far below every band so a
@@ -78,8 +84,28 @@ export class TranscriptBuilder {
           message: { content: [{ type: "tool_result", tool_use_id: id, is_error: true }] },
         }),
       );
+    } else if (opts.resultChars != null || opts.resultImages != null) {
+      // The body is MARKER repeated: a result that reaches storage is caught by
+      // the same scan as a path.
+      const text = MARKER.repeat(Math.ceil((opts.resultChars ?? 0) / MARKER.length)).slice(0, opts.resultChars ?? 0);
+      const blocks: unknown[] = [];
+      if (text.length > 0) blocks.push({ type: "text", text });
+      for (let i = 0; i < (opts.resultImages ?? 0); i++) {
+        blocks.push({ type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(400_000) } });
+      }
+      this.lines.push(
+        JSON.stringify({
+          type: "user",
+          message: { content: [{ type: "tool_result", tool_use_id: id, content: blocks }] },
+        }),
+      );
     }
     return this;
+  }
+
+  /** An MCP tool call — `mcp__<server>__<tool>`, the host's wire spelling. */
+  mcp(server: string, tool: string, opts: CallOpts = {}): this {
+    return this.call(`mcp__${server}__${tool}`, { query: MARKER }, opts);
   }
 
   read(name: string, opts: CallOpts = {}): this {

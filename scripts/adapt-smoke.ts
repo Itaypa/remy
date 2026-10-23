@@ -21,12 +21,14 @@ import {
   buildAdaptPayload,
   buildAdaptPrompt,
   parseAdaptOutput,
+  resolveAdaptModel,
 } from "../packages/core/src/adapt";
 import { TIPS } from "../packages/core/src/catalog";
 import { openDb } from "../packages/core/src/store";
 import { recordFindings } from "../packages/core/src/tips";
 
-const MODEL = "haiku";
+/** The default, or whatever `REMY_ADAPT_MODEL` says — the same resolution the CLI uses. */
+const MODEL = resolveAdaptModel(process.env.REMY_ADAPT_MODEL, null);
 
 /** A developer who plans nothing, rides the context, and never verifies —
  * strong enough signal that a sensible answer is recognisable. */

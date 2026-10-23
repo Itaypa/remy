@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.4.0 — a mouse with a sign, a sensor inside the host, and two tips about a bloated window
+
+**The art.** The welcome is now Joan G. Stark's ASCII mouse holding a sign that reads
+TOKENS BEING SAVED (`art/remy.txt`, embedded byte for byte — `ui.test.ts` asserts the
+file and the binary agree, which the old hand-downsampled halftone never did). The everyday
+mark is his face: four lines, cropped from the same art. The previous three-line mark was,
+on inspection, an owl.
+
+**REMY now ships a mod.** `hooks/hooks.json` names one function-hooks module
+(`hooks/register.ts`) that runs inside Claude Code. It is a sensor, not a surface: after
+the first completed turn and every tenth after, it reads the context window broken down
+the way `/context` draws it — including every MCP server's schema weight and whether the
+schema is loaded — and pipes the numbers to `remy ingest` as a `ContextProfile`. Server
+names are hashed at the door exactly as file paths are; the mod stores nothing, draws
+nothing, and calls no model, and `privacy.test.ts` asserts its source touches nothing on
+the engine but `session.usage`, `session.id`, `plugin.root` and `process.run`. A host
+without function hooks ignores it and nothing changes.
+
+**Two new tips about a window full of something that shouldn't be there.**
+- `🔌 mcp-idle` — "claude_ai_Gmail parks 24k of tool schemas in every turn, and this
+  session never called it once → disable it in /mcp until you need it". The configured
+  half comes from the mod, the usage half from the tool events REMY already keeps, joined on
+  a hash; only *loaded* schemas count, since the host defers them by default. `context-tax`
+  yields to it, and gains a `{biggest}` attribution ("mostly MCP tool schemas (62k)") when
+  the mod has reported. This unparks trend-watch F1 and backlog S19.
+- `🔊 noisy-tool` — "Claude_Browser/snapshot returned ~20k tokens per call, 12 times —
+  240k parked in the window → ask for less: a filter, a range, a page". Every tool's
+  results are now weighed, not just `Read`'s, and **images are priced by their pixels**
+  (~1.6k each, the API's ceiling) rather than by their base64 — the mis-measurement that
+  made a browser session look like a 100k offender and got every non-Read tool excluded in
+  0.3.x. The median result has to be big: one oversized answer is an answer.
+
+**The adaptive coach runs on `sonnet`.** The one daily headless call used a hard-coded
+`haiku`. It now runs on the `sonnet` alias by default (Sonnet 5.5 on the Anthropic API
+today — an alias, so it tracks what the CLI resolves it to), retries once on `haiku` if
+that fails, and takes `REMY_ADAPT_MODEL` or `remy adapt --model <alias>`; `--status` shows
+which. At one ~2k-token call a day the price difference rounds to nothing on any plan.
+
+Also: `claude plugin validate` is a preflight gate; `.mcp.json`/`~/.claude.json` are read
+(never written) to name a server at render time; the stray 🐀 is a 🐭 everywhere.
+
 ## v0.3.1 — the dev-build badge stops following real installs
 
 `isDevInstall()` decided the `⚙ v0.3.0+…` statusline badge by testing whether

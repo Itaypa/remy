@@ -373,34 +373,37 @@ export function weekTotals(rows: SessionRow[]): WeekTotals {
   };
 }
 
-/** The full halftone rat (packages/plugin-claude-code/art/rat.txt) downsampled
- * to a greeting. Shown ONCE per version — the first session after an install
- * or an upgrade — because a session starts far more often than people think
- * (/clear, resume, /reload-plugins), and art that appears every time stops
- * being art and becomes scrollback. */
-const WELCOME_ART = [
-  "                ...      :::",
-  "              .:#@#+---::::.",
-  "            . :@@#%@@@@@#*:.",
-  "         :=##%@@@@@@@@@@+-+:.",
-  "         .:+*#@@@@@@@@#=-+++-",
-  ".           :+@@@@@@%+==%#-:",
-  "           -%@@@@@@@@@@@%:.",
-  "         :+@@@@@@@@@@%=:",
-  "        :#@@@@@@@@%=..",
-  "        #@@@@@@@@@#:",
-  "       -@@@@@@@%@%*:",
-  "       -@@@@@@@@@%%-",
-  "       :@@@@@%@%%%#+.",
-  " ...:-+*@@@@@%@@@@@+.",
-  "-====:::-%@@@@@@@@#+:",
-  ".--:    ..:=+=:.    .",
+/** The mouse with the sign — Joan G. Stark's (jgs) ASCII mouse, the sign
+ * re-lettered. This array IS `packages/plugin-claude-code/art/remy.txt`, byte
+ * for byte (ui.test.ts asserts it), so the README hero and the welcome can't
+ * drift apart the way the old hand-downsampled halftone did.
+ *
+ * Shown ONCE per version — the first session after an install or an upgrade —
+ * because a session starts far more often than people think (/clear, resume,
+ * /reload-plugins), and art that appears every time stops being art and
+ * becomes scrollback. */
+export const WELCOME_ART = [
+  "             __",
+  "          __/  \\",
+  "         /  \\-./",
+  "         \\_   66\\_",
+  "           \\  ____)o",
+  "            )_(___________",
+  "   .-.     /| T O K E N S |",
+  "(_/   \\   / |  B E I N G  ()",
+  "       |  \\ \\  S A V E D  |",
+  "        \\  \\_)            |",
+  "         '-'/ \\\"\\\"\"\"\"\"\"\"\"\"`",
+  "           / / \\ \\/^)",
+  "          (  \\  \\  /",
+  "   jgs     \\__)  \"`",
 ];
 
-// The everyday mascot, three lines tall, padded to one column so the text
-// beside it lines up. The tail deliberately runs toward line 3 — the tip
-// line, which is the one thing on the splash worth reading.
-const ART = ["  ,__,      ", " (o,o)      ", ' (")_(")~~~ '];
+// The everyday mascot: the same mouse's face (lines 2–5 of the welcome art,
+// left-trimmed), padded to one column so the text beside it lines up. Four
+// lines, not three — an ear, a brow, the eyes and the nose are the minimum
+// that still reads as him; the previous three-line mark was an owl.
+export const ART = [" __/  \\    ", "/  \\-./    ", "\\_   66\\_  ", "  \\  ____)o"];
 
 export function splash(opts: {
   version: string;
@@ -428,9 +431,10 @@ export function splash(opts: {
         ` ${line3}`,
       ]
     : [
-        `${ART[0]}   REMY v${opts.version}`,
-        `${ART[1]}   last 7d: ${opts.week.sessions} sessions · ${fmtTok(spend)} 🪙`,
-        `${ART[2]}   ${line3}`,
+        `${ART[0]}`,
+        `${ART[1]}   REMY v${opts.version}`,
+        `${ART[2]}   last 7d: ${opts.week.sessions} sessions · ${fmtTok(spend)} 🪙`,
+        `${ART[3]}   ${line3}`,
       ];
   if (opts.refreshNudge) {
     lines.push(`     ⚙ run "remy init" — turns on live loading-screen tips`);
@@ -466,9 +470,14 @@ function fileVarFrom(
   evidence: Record<string, string | number>,
   files: Map<string, string> | undefined,
 ): Record<string, string> {
-  const hash = evidence.file_hash;
-  const name = typeof hash === "string" ? files?.get(hash) : undefined;
-  return name ? { file: name } : {};
+  const out: Record<string, string> = {};
+  const file = typeof evidence.file_hash === "string" ? files?.get(evidence.file_hash) : undefined;
+  if (file) out.file = file;
+  // Same map, same contract, for the one other thing a tip can name: an MCP
+  // server, resolved from its wire segment's hash (resolve.ts).
+  const server = typeof evidence.server_hash === "string" ? files?.get(evidence.server_hash) : undefined;
+  if (server) out.server = server;
+  return out;
 }
 
 /** "claude-haiku-4-5-20251001" → "haiku-4-5" — the part a human reads. */

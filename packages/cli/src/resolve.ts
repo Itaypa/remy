@@ -1,4 +1,7 @@
 import { hashPath } from "@ccpp/core";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // Turning a stored target hash back into a filename, at RENDER time.
 //
@@ -77,6 +80,69 @@ export function resolveTargets(hashes: Iterable<string>, cwd: string): Map<strin
   return out;
 }
 
+/** Map stored MCP server hashes back to server names, the same way and under
+ * the same rules as `resolveTargets`: nothing is stored, a name only ever
+ * appears for someone who already has that server, and an unresolvable hash
+ * leaves the catalog's fallback wording in place.
+ *
+ * The hash is of the server's WIRE segment — the `<server>` in every
+ * `mcp__<server>__<tool>` name the host emits — so the candidates are: every
+ * segment this machine has ever called (`mcpServerSegments`, handed in by the
+ * caller, since this file holds no DB handle), plus the server names in the
+ * local MCP config files, spelled the way the host spells them on the wire.
+ * Both are read-only; the config files are read, never written. */
+export function resolveMcpServers(hashes: Iterable<string>, cwd: string, knownSegments: Iterable<string> = []): Map<string, string> {
+  const out = new Map<string, string>();
+  const wanted = new Set([...hashes].filter((h) => typeof h === "string" && h.length > 0));
+  if (wanted.size === 0) return out;
+  const candidates = new Set<string>(knownSegments);
+  for (const name of configuredMcpServers(cwd)) candidates.add(wireSegment(name));
+  for (const seg of candidates) {
+    const hash = hashPath(seg);
+    if (wanted.has(hash)) out.set(hash, seg);
+  }
+  return out;
+}
+
+/** The host spells a server name into tool names with every character outside
+ * `[A-Za-z0-9_-]` turned into `_` ("claude.ai Gmail" → `claude_ai_Gmail`).
+ * Best effort: a segment the events table already holds needs no spelling. */
+function wireSegment(serverName: string): string {
+  return serverName.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+/** Server names from the two config files the host reads: the user's
+ * `~/.claude.json` (global and per-project) and the project's `.mcp.json`.
+ * Anything missing or malformed just contributes nothing. */
+function configuredMcpServers(cwd: string): string[] {
+  const names: string[] = [];
+  const keysOf = (v: unknown): string[] => (v && typeof v === "object" ? Object.keys(v as object) : []);
+  try {
+    const user = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8")) as Record<string, any>;
+    names.push(...keysOf(user.mcpServers));
+    for (const proj of Object.values(user.projects ?? {})) names.push(...keysOf((proj as any)?.mcpServers));
+  } catch {
+    // no user config, or not ours to parse
+  }
+  try {
+    const project = JSON.parse(readFileSync(join(cwd, ".mcp.json"), "utf8")) as Record<string, any>;
+    names.push(...keysOf(project.mcpServers));
+  } catch {
+    // no project config
+  }
+  return names;
+}
+
+/** Collect the `server_hash` values out of a set of tip evidence blobs. */
+export function serverHashesIn(evidenceBlobs: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const blob of evidenceBlobs) {
+    const h = hashIn(blob, "server_hash");
+    if (h) out.push(h);
+  }
+  return out;
+}
+
 /** Collect the `file_hash` values out of a set of tip evidence blobs.
  *
  * Kept here rather than at each call site so that adding a `file_hash` to a new
@@ -92,25 +158,36 @@ export function fileHashesIn(evidenceBlobs: Array<string | null | undefined>): s
 }
 
 function fileHashIn(blob: string | null | undefined): string | null {
+  return hashIn(blob, "file_hash");
+}
+
+function hashIn(blob: string | null | undefined, key: "file_hash" | "server_hash"): string | null {
   if (!blob) return null;
   try {
-    const h = (JSON.parse(blob) as { file_hash?: unknown }).file_hash;
+    const h = (JSON.parse(blob) as Record<string, unknown>)[key];
     return typeof h === "string" && h.length > 0 ? h : null;
   } catch {
-    // evidence is display-only; an unparseable blob just has no filename
+    // evidence is display-only; an unparseable blob just has no name
     return null;
   }
 }
 
-/** The `{file}` template variable for one tip, or nothing — in which case the
- * catalog's `fallbacks` put the generic wording back ("one file"). Returning
- * an empty object rather than a placeholder string is what keeps an
- * unresolvable hash from ever reaching a rendered line. */
+/** The `{file}` and `{server}` template variables for one tip, or nothing —
+ * in which case the catalog's `fallbacks` put the generic wording back ("one
+ * file", "one MCP server"). Returning an empty object rather than a
+ * placeholder string is what keeps an unresolvable hash from ever reaching a
+ * rendered line. One map serves both: every hash in it is a sha256/16 of
+ * something the caller resolved from the machine in front of it. */
 export function fileVar(
   evidence: string | null | undefined,
-  files: Map<string, string>,
+  names: Map<string, string>,
 ): Record<string, string> {
-  const hash = fileHashIn(evidence);
-  const name = hash ? files.get(hash) : undefined;
-  return name ? { file: name } : {};
+  const out: Record<string, string> = {};
+  const file = fileHashIn(evidence);
+  const fileName = file ? names.get(file) : undefined;
+  if (fileName) out.file = fileName;
+  const server = hashIn(evidence, "server_hash");
+  const serverName = server ? names.get(server) : undefined;
+  if (serverName) out.server = serverName;
+  return out;
 }

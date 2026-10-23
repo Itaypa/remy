@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyCommand, contextFromPayload, parseTranscript, parseTranscriptFile, tailContext, type BashClass } from "../src/transcript";
+import { classifyCommand, contextFromPayload, parseTranscript, parseTranscriptFile, resultTokens, tailContext, type BashClass } from "../src/transcript";
 
 function assistantLine(opts: {
   id: string;
@@ -782,12 +782,53 @@ describe("oversized tool results", () => {
     expect(parseTranscript(lines.join("\n"), 200_000).fatReads).toBe(0);
   });
 
-  test("only Read counts — a huge browser result is an image, not a user's choice", () => {
+  test("only Read counts toward fat reads — but every tool is weighed in the profile", () => {
     const lines = [
       useLine("t1", "mcp__Claude_Browser__computer", "https://example.com"),
       resultLine("t1", 400_000),
     ];
-    expect(parseTranscript(lines.join("\n"), 200_000).fatReads).toBe(0);
+    const stats = parseTranscript(lines.join("\n"), 200_000);
+    expect(stats.fatReads).toBe(0);
+    expect(stats.toolResultProfile).toEqual([
+      { name: "mcp__Claude_Browser__computer", calls: 1, tokens: 100_000, worstTokens: 100_000, medianTokens: 100_000 },
+    ]);
+  });
+
+  test("an image is priced by its pixels, not its base64 — a screenshot is ~1.6k, not 100k", () => {
+    const imageResult = (id: string) =>
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: id,
+              content: [
+                { type: "text", text: "x".repeat(400) },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(400_000) } },
+              ],
+            },
+          ],
+        },
+      });
+    const lines = [useLine("t1", "mcp__Claude_Browser__screenshot", "https://example.com"), imageResult("t1")];
+    const stats = parseTranscript(lines.join("\n"), 200_000);
+    expect(stats.toolResultProfile[0]!.tokens).toBe(100 + 1_600);
+    expect(resultTokens([{ type: "image", source: {} }, { type: "image", source: {} }])).toBe(3_200);
+    expect(resultTokens("abcd".repeat(100))).toBe(100);
+    expect(resultTokens(null)).toBe(0);
+  });
+
+  test("the profile is per tool, sorted by weight, with a median that ignores the one big outlier", () => {
+    const lines: string[] = [];
+    for (const [i, chars] of [4_000, 4_000, 400_000].entries()) {
+      lines.push(useLine(`b${i}`, "Bash", "/bin"), resultLine(`b${i}`, chars));
+    }
+    for (const i of [0, 1]) lines.push(useLine(`g${i}`, "Grep", "/src"), resultLine(`g${i}`, 40_000));
+    const stats = parseTranscript(lines.join("\n"), 200_000);
+    expect(stats.toolResultProfile.map((p) => p.name)).toEqual(["Bash", "Grep"]);
+    const bash = stats.toolResultProfile[0]!;
+    expect(bash).toEqual({ name: "Bash", calls: 3, tokens: 102_000, worstTokens: 100_000, medianTokens: 1_000 });
   });
 
   test("the result content never leaves the parser — only its length does", () => {

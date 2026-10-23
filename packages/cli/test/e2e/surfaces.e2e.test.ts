@@ -172,3 +172,46 @@ describe("the privacy scan itself", () => {
     expect(privacyLeaks(w)).toContain(`remy.log contains ${JSON.stringify(MARKER)}`);
   });
 });
+
+describe("the sensor mod's report reaches the coaching line", () => {
+  const clean = SCENARIOS.find((s) => s.name === "clean: a well-driven session")!;
+
+  test("an idle MCP server is named, with the file-style resolution, nothing stored but a hash", async () => {
+    // What hooks/register.ts sends after a turn: the window by category, and
+    // every server's schema weight by its wire segment.
+    const report = await hook(w, "ContextProfile", {
+      window: 200_000,
+      system_prompt_tokens: 3_000,
+      system_tools_tokens: 12_000,
+      memory_tokens: 2_000,
+      skills_tokens: 1_000,
+      agents_tokens: 0,
+      messages_tokens: 500,
+      mcp: [
+        { server: "claude_ai_Gmail", tools: 30, loaded_tools: 30, tokens: 24_000 },
+        { server: "linear", tools: 8, loaded_tools: 8, tokens: 9_000 },
+      ],
+    });
+    expect(report.stdout).toBe("");
+    // The session calls linear once and Gmail never.
+    await hook(w, "PostToolUse", { tool_name: "mcp__linear__list_issues", tool_input: { query: "x" }, tool_response: {} });
+    await driveSession(w, clean);
+
+    expect(activeTipId(w)).toBe("mcp-idle");
+    // The name comes back at render time from the segments this machine has
+    // called — here, from the Gmail call recorded in another session.
+    await hook(w, "PostToolUse", { tool_name: "mcp__claude_ai_Gmail__search_threads", tool_input: {}, tool_response: {} }, "other-session");
+    const rendered = stripAnsi((await remy(w, ["report"])).stdout);
+    expect(rendered).toContain("An MCP server you never called");
+    expect(rendered).toContain("claude_ai_Gmail");
+    expect(privacyLeaks(w)).toEqual([]);
+  });
+
+  test("without the mod's report, context-tax keeps its generic wording", async () => {
+    const heavy = SCENARIOS.find((s) => s.name === "context-tax")!;
+    await driveSession(w, heavy);
+    expect(activeTipId(w)).toBe("context-tax");
+    const rendered = stripAnsi((await remy(w, ["report"])).stdout);
+    expect(rendered).toContain("skills, MCP and CLAUDE.md");
+  });
+});

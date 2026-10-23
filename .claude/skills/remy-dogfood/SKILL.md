@@ -81,7 +81,8 @@ REMY_DATA_DIR=$D ~/.remy/bin/current report
 
 `REMY_HOME` retargets the bin dir (use it to simulate a fresh machine against a
 real GitHub release); `REMY_SETTINGS_PATH` retargets settings.json for spinner
-tests; `REMY_ADAPT_CMD` stubs the adaptive analyzer's backend.
+tests; `REMY_ADAPT_CMD` stubs the adaptive analyzer's backend and `REMY_ADAPT_MODEL`
+picks the alias it runs on (default `sonnet`).
 
 **Never seed `~/.remy` with synthetic data casually** — `dismiss` writes a
 30-day cooldown per tip id, and the real DB is your own session history.

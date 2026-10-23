@@ -20,6 +20,9 @@ and delivers short, quantified tips through zero-token channels:
 - **`Stop`-hook nudge** — at most one transient `systemMessage` per turn
 - **the host's own spinner tip line** — via `spinnerTipsOverride` (opt-in, `remy spinner`)
 - **`/remy`**, **`/remy-week`**, **`/remy-dismiss`** — the plugin commands
+- **the sensor mod** — one function-hooks module (`hooks/register.ts`) that runs inside the
+  host, reads `/context` as numbers, and pipes them to `remy ingest`; it never draws,
+  stores or calls anything (see `docs/claude-code-surfaces.md`)
 
 Think Grammarly, but for how you drive your coding agent.
 
@@ -66,7 +69,7 @@ packages/
                               #   resolve.ts: hash → filename at RENDER time (stores nothing)
   plugin-claude-code/         # first host adapter: plugin manifest, hooks, /remy commands,
                               #   bin/remy (the committed launcher — see Shipping below),
-                              #   art/rat.txt (the source art)
+                              #   art/remy.txt (the source art — the welcome splash IS this file)
 scripts/                      # build-plugin.ts (compile) · preflight.ts (release gate) ·
                               #   mutation.ts (mutation-testing harness, run by hand)
 docs/                         # design-language.md · claude-code-surfaces.md ·
@@ -84,8 +87,11 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   upgrades without a migration.
 - Rules are **deterministic** — no model calls in the inline path (statusline, hooks,
   rules). The one exception is the **Adaptive Coach** (`remy adapt`, `core/src/adapt.ts`):
-  an out-of-band background analysis, at most one headless `claude -p --model haiku` call
+  an out-of-band background analysis, at most one headless `claude -p --model sonnet` call
   per day, detached from the SessionEnd hook (never blocking, never from the statusline).
+  The model is an **alias** (`ADAPT_DEFAULT_MODEL` in `core/src/adapt.ts`), so it tracks
+  what the claude CLI resolves it to; `REMY_ADAPT_MODEL` or `remy adapt --model <alias>`
+  overrides it, and a failed call is retried once on `haiku`.
   Its payload is metadata-only and zod-whitelisted (`AdaptPayloadSchema` — numbers, rates,
   catalog ids; free text is structurally impossible); the model picks a catalog tip and
   writes a "why you're seeing this" line that stays local. On by default;
@@ -106,8 +112,11 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   re-hashing the local working tree and matching the stored hash, then drops it. A name
   therefore only ever appears for someone who already has that file on disk. Rules put a
   `file_hash` in evidence; unresolved, the catalog's `fallbacks` restore the generic
-  wording. Nothing new is stored and no second outbound path exists — `privacy.test.ts`
-  asserts resolve.ts has no DB handle, no file writes, and no spawn but `git ls-files`.
+  wording. The same trick names an MCP server (`server_hash` → `{server}`): the hash is of
+  the server's wire segment, resolved against the segments this machine has called plus
+  its MCP config files. Nothing new is stored and no second outbound path exists —
+  `privacy.test.ts` asserts resolve.ts has no DB handle, no file writes, and no spawn but
+  `git ls-files`.
 - **Design language = `docs/design-language.md` ("Coin").** Playful, emoji + ASCII art,
   **🪙 is the token unit**, but a coaching line's earn is in dollars when the session
   carries a measured cost. The noise budget is law: one active tip at a time,
@@ -125,7 +134,9 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   `PostToolUseFailure`, `PermissionDenied`, `PreCompact`, `Stop`, `SessionEnd` — note
   `PostToolUse` fires **only on success**, which is why the failure event exists;
   `PermissionRequest` is deliberately **not** registered, because stdout on that event
-  is an allow/deny decision and a coaching tool has no business in the approval path),
+  is an allow/deny decision and a coaching tool has no business in the approval path;
+  `hooks.json` also names one function-hooks **module** — the sensor — whose
+  `ContextProfile` report enters through the same `ingest` switch),
   statusline command (constant single-layout HUD;
   `refreshInterval` keeps it fresh between host repaints), plugin commands, and
   `${CLAUDE_PLUGIN_ROOT}` for portable paths. Hook handlers read the event JSON from stdin

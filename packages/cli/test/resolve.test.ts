@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashPath } from "@ccpp/core";
-import { fileHashesIn, fileVar, resolveTargets } from "../src/resolve";
+import { fileHashesIn, fileVar, resolveMcpServers, resolveTargets, serverHashesIn } from "../src/resolve";
 
 // The filename is the most recognizable thing REMY can say, and the one thing
 // the store may never keep. These tests pin both halves of that bargain: the
@@ -106,5 +106,29 @@ describe("pulling file hashes out of tip evidence", () => {
     expect(fileVar(JSON.stringify({ file_hash: "deadbeefdeadbeef" }), files)).toEqual({});
     expect(fileVar(null, files)).toEqual({});
     expect(fileVar("{broken", files)).toEqual({});
+  });
+});
+
+describe("resolving a stored server hash back to an MCP server", () => {
+  test("a segment this machine has called resolves; a foreign one does not", () => {
+    const gmail = hashPath("claude_ai_Gmail");
+    const foreign = hashPath("someone_elses_server");
+    const out = resolveMcpServers([gmail, foreign], dir, ["claude_ai_Gmail", "linear"]);
+    expect(out.get(gmail)).toBe("claude_ai_Gmail");
+    expect(out.has(foreign)).toBe(false);
+  });
+
+  test("a server configured in the project's .mcp.json resolves through the host's wire spelling", () => {
+    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { "claude.ai Docs": { url: "x" } } }));
+    const h = hashPath("claude_ai_Docs");
+    expect(resolveMcpServers([h], dir).get(h)).toBe("claude_ai_Docs");
+  });
+
+  test("fileVar carries both names off one map, and neither when unresolved", () => {
+    const names = new Map([[hashPath("linear"), "linear"], [hashPath("/p/a.ts"), "a.ts"]]);
+    const evidence = JSON.stringify({ file_hash: hashPath("/p/a.ts"), server_hash: hashPath("linear") });
+    expect(fileVar(evidence, names)).toEqual({ file: "a.ts", server: "linear" });
+    expect(fileVar(JSON.stringify({ server_hash: hashPath("nope") }), names)).toEqual({});
+    expect(serverHashesIn([evidence, null, "{}"])).toEqual([hashPath("linear")]);
   });
 });

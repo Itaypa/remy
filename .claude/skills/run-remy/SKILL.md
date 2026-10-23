@@ -116,6 +116,9 @@ Things that cost real time to discover:
   higher-value deterministic finding in the one active slot). They sit in the
   queue until the deterministic tips are dismissed. Asserting on `tips` after
   running `adapt` passes vacuously forever — query the DB, or dismiss down to it.
+- **The adaptive call runs on the `sonnet` alias** (`REMY_ADAPT_MODEL` or
+  `remy adapt --model` to change it; `remy adapt --status` shows it). The stub below
+  replaces the whole command, so the model flag is never appended to it.
 - **`REMY_ADAPT_CMD` is split on spaces**, so a stub can't contain a spaced
   payload. Write the response to a file and use `cat <file>` — `cat` ignores the
   prompt arriving on stdin.

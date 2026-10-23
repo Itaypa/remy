@@ -68,6 +68,48 @@ export const SessionEventSchema = z.object({
 });
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
 
+/** What the sensor mod reports about the context window, once the CLI has
+ * hashed the server names: `/context` as numbers. Same whitelist discipline
+ * as the event — a server is a 16-hex hash of its wire segment, every other
+ * field is a count, and anything else is stripped. The mod itself never
+ * touches the store; this is the only door its report comes through. */
+const Count = z.number().int().nonnegative();
+export const ContextProfileSchema = z
+  .object({
+    session_id: IdStr,
+    ts: IsoTs,
+    window: Count,
+    system_prompt_tokens: Count.default(0),
+    system_tools_tokens: Count.default(0),
+    memory_tokens: Count.default(0),
+    skills_tokens: Count.default(0),
+    agents_tokens: Count.default(0),
+    messages_tokens: Count.default(0),
+    mcp: z
+      .array(
+        z
+          .object({
+            server_hash: Hash16,
+            tools: Count,
+            loaded_tools: Count,
+            tokens: Count,
+          })
+          .strict(),
+      )
+      .max(64)
+      .default([]),
+  })
+  .strict();
+export type ContextProfile = z.infer<typeof ContextProfileSchema>;
+
+/** Privacy gate for the mod's report: a whitelisted profile or null. Strict,
+ * unlike the event schema — the sender is our own code, so an unknown key is
+ * a bug to surface, not host noise to strip. Never throws. */
+export function sanitizeContextProfile(raw: unknown): ContextProfile | null {
+  const res = ContextProfileSchema.safeParse(raw);
+  return res.success ? res.data : null;
+}
+
 export function hashPath(p: string): string {
   return createHash("sha256").update(p).digest("hex").slice(0, 16);
 }

@@ -85,6 +85,13 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     cache_ttl_ms: null,
     cache_anchor_at: null,
     cache_model: null,
+    ctx_system_tokens: null,
+    ctx_tools_tokens: null,
+    ctx_memory_tokens: null,
+    ctx_skills_tokens: null,
+    ctx_agents_tokens: null,
+    ctx_mcp_tokens: null,
+    ctx_messages_tokens: null,
     ...overrides,
   };
 }
@@ -611,5 +618,134 @@ describe("habit rules", () => {
     const fat = otherFiles.find((x) => x.tipId === "read-in-slices");
     expect(fat).toBeDefined();
     expect(fat!.estSavingsTokens).toBeGreaterThan(0);
+  });
+});
+
+describe("noisy-tool — one tool whose results are routinely enormous", () => {
+  const profile = (name: string, sizes: number[]) => {
+    const sorted = [...sizes].sort((a, b) => a - b);
+    return {
+      name,
+      calls: sizes.length,
+      tokens: sizes.reduce((a, b) => a + b, 0),
+      worstTokens: sorted[sorted.length - 1]!,
+      medianTokens: sorted[Math.floor(sorted.length / 2)]!,
+    };
+  };
+
+  test("fires on a big median, names the server/tool, and charges only the excess", () => {
+    const f = analyzeSession(
+      snapshot({ toolResultProfile: [profile("mcp__Claude_Browser__snapshot", [20_000, 20_000, 20_000, 20_000])] }),
+    ).find((x) => x.tipId === "noisy-tool");
+    expect(f).toBeDefined();
+    expect(f!.evidence).toEqual({ tool: "Claude_Browser/snapshot", calls: 4, avg_k: 20, worst_k: 20, total_k: 80 });
+    expect(f!.estSavingsTokens).toBe(Math.round((80_000 - 4 * 6_000) * 0.9));
+    expect(f!.estClass).toBe("input");
+  });
+
+  test("a single oversized answer is an answer — the median decides, not the worst", () => {
+    const f = analyzeSession(
+      snapshot({ toolResultProfile: [profile("mcp__docs__search", [80_000, 500, 500])] }),
+    ).find((x) => x.tipId === "noisy-tool");
+    expect(f).toBeUndefined();
+  });
+
+  test("below three calls nothing fires", () => {
+    const f = analyzeSession(
+      snapshot({ toolResultProfile: [profile("WebFetch", [30_000, 30_000])] }),
+    ).find((x) => x.tipId === "noisy-tool");
+    expect(f).toBeUndefined();
+  });
+
+  test("Read is read-in-slices' business, and the heaviest offender wins", () => {
+    const found = analyzeSession(
+      snapshot({
+        toolResultProfile: [
+          profile("Read", [50_000, 50_000, 50_000]),
+          profile("WebFetch", [10_000, 10_000, 10_000]),
+          profile("mcp__db__query", [9_000, 9_000, 9_000, 9_000]),
+        ],
+      }),
+    ).filter((x) => x.tipId === "noisy-tool");
+    expect(found).toHaveLength(1);
+    expect(found[0]!.evidence.tool).toBe("db/query");
+  });
+
+  test("a hostile or overlong tool name is gated and bounded before it becomes evidence", () => {
+    const f = analyzeSession(
+      snapshot({ toolResultProfile: [profile("mcp__a_server_with_an_extremely_long_name__and_a_long_tool_name_too", [9_000, 9_000, 9_000])] }),
+    ).find((x) => x.tipId === "noisy-tool")!;
+    expect(String(f.evidence.tool).length).toBeLessThanOrEqual(28);
+    const hostile = analyzeSession(
+      snapshot({ toolResultProfile: [profile("rm -rf /Users/x", [9_000, 9_000, 9_000])] }),
+    ).find((x) => x.tipId === "noisy-tool")!;
+    expect(hostile.evidence.tool).toBe("the same tool");
+  });
+
+  test("a snapshot without a profile says nothing", () => {
+    expect(analyzeSession(snapshot({})).find((x) => x.tipId === "noisy-tool")).toBeUndefined();
+  });
+});
+
+describe("mcp-idle — a server whose schemas ride every turn and that nobody called", () => {
+  const server = (serverHash: string, tokens: number, calls: number, loadedTools = 12) => ({
+    serverHash,
+    tokens,
+    tools: loadedTools,
+    loadedTools,
+    calls,
+  });
+  const H1 = "1111111111111111";
+  const H2 = "2222222222222222";
+
+  test("names the heaviest idle server and prices it at the cache-read rate, per turn", () => {
+    const f = analyzeSession(
+      snapshot({ assistantTurns: 41, mcpServers: [server(H1, 24_000, 0), server(H2, 60_000, 3), server("3333333333333333", 9_000, 0)] }),
+    ).find((x) => x.tipId === "mcp-idle");
+    expect(f).toBeDefined();
+    expect(f!.evidence).toEqual({
+      server_hash: H1,
+      tokens_k: 24,
+      tools_clause: "12 tool schemas",
+      turns_clause: "41 turns",
+      idle_servers: 2,
+    });
+    expect(f!.estSavingsTokens).toBe(24_000 * 41);
+    expect(f!.estClass).toBe("cache-read");
+  });
+
+  test("a server that was called, a deferred one, or a small one does not fire", () => {
+    for (const s of [server(H1, 24_000, 1), server(H1, 24_000, 0, 0), server(H1, 7_999, 0)]) {
+      expect(analyzeSession(snapshot({ mcpServers: [s] })).find((x) => x.tipId === "mcp-idle")).toBeUndefined();
+    }
+    expect(analyzeSession(snapshot({})).find((x) => x.tipId === "mcp-idle")).toBeUndefined();
+  });
+
+  test("one turn and one tool read as words, never as '1 turns'", () => {
+    const f = analyzeSession(snapshot({ assistantTurns: 1, mcpServers: [server(H1, 9_000, 0, 1)] })).find(
+      (x) => x.tipId === "mcp-idle",
+    )!;
+    expect(f.evidence.tools_clause).toBe("one tool schema");
+    expect(f.evidence.turns_clause).toBe("one turn");
+  });
+
+  test("context-tax yields to it — the same finding with a name and a command attached", () => {
+    const found = analyzeSession(
+      snapshot({ firstContextTokens: 90_000, assistantTurns: 10, mcpServers: [server(H1, 40_000, 0)] }),
+    ).map((x) => x.tipId);
+    expect(found).toContain("mcp-idle");
+    expect(found).not.toContain("context-tax");
+  });
+
+  test("context-tax names the heaviest category when the mod has reported one", () => {
+    const f = analyzeSession(
+      snapshot({
+        firstContextTokens: 90_000,
+        contextCategories: { system: 3_000, tools: 12_000, memory: 18_000, skills: 4_000, agents: 500, mcp: 62_000 },
+      }),
+    ).find((x) => x.tipId === "context-tax")!;
+    expect(f.evidence.biggest).toBe("MCP tool schemas (62k)");
+    const unreported = analyzeSession(snapshot({ firstContextTokens: 90_000 })).find((x) => x.tipId === "context-tax")!;
+    expect(unreported.evidence).not.toHaveProperty("biggest");
   });
 });

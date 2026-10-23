@@ -20,6 +20,8 @@ import {
   setAutoMemoryBytes,
   setCacheClock,
   touchCacheAnchor,
+  sanitizeContextProfile,
+  setContextProfile,
 } from "../src/index";
 
 const MARKER = "SUPER_SECRET_PROMPT_BODY_should_never_be_stored";
@@ -190,6 +192,70 @@ describe("privacy gate", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the sensor mod is a sensor — it reads the window, pipes numbers, and does nothing else", () => {
+    // hooks/register.ts is the one piece of REMY that runs inside the host's
+    // own process, with an engine interface that can call a model, write
+    // files, read the transcript and draw on the screen. It may do none of
+    // that. Its whole job is one `$.session.usage` read and one spawn of our
+    // own binary; everything else on `$` is off limits, and this is what
+    // keeps "no second outbound path" true for the mod as well.
+    const src = readFileSync(
+      join(import.meta.dir, "..", "..", "plugin-claude-code", "hooks", "register.ts"),
+      "utf8",
+    );
+    expect(EGRESS.test(src)).toBe(false);
+    for (const forbidden of [
+      /\$\.model\b/, //        no model calls — coaching stays deterministic
+      /\$\.network\b/, //      no network
+      /\$\.fs\.write/, //      no file writes
+      /\$\.store\b/, //        keeps nothing of its own
+      /\$\.state\b/,
+      /\$\.ui\b/, //           shows nothing — the Stop hook owns the noise budget
+      /\$\.session\.messages/, // never reads the conversation
+      /\$\.prompt\b/,
+      /\$\.agent\b/,
+      /\$\.tool\b/,
+      /transcript/i,
+    ]) {
+      expect(src, `register.ts touches ${forbidden}`).not.toMatch(forbidden);
+    }
+    // The only calls on `$` it makes are the two it is for.
+    const calls = new Set([...src.matchAll(/\$\.(\w+)\.(\w+)/g)].map((m) => `${m[1]}.${m[2]}`));
+    expect([...calls].sort()).toEqual(["plugin.root", "process.run", "session.id", "session.usage"]);
+    // And the one process it starts is our own launcher, with `ingest`.
+    expect(src).toMatch(/\$\.process\.run\(\[`\$\{\$\.plugin\.root\}\/bin\/remy`, "ingest"\]/);
+  });
+
+  test("the sensor mod's report is gated like a hook event — a raw server name never reaches the table", () => {
+    const db = openDb(":memory:");
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:00:00.000Z" });
+    // What the mod sends carries wire segments; ingest hashes them before the
+    // gate. A report that somehow still carries a name is refused whole.
+    const hostile = sanitizeContextProfile({
+      session_id: "s1",
+      ts: "2026-07-26T10:00:00.000Z",
+      window: 200_000,
+      mcp: [{ server_hash: `/Users/x/${MARKER}`, tools: 1, loaded_tools: 1, tokens: 9_000 }],
+      prompt: MARKER,
+    });
+    expect(hostile).toBeNull();
+    const clean = sanitizeContextProfile({
+      session_id: "s1",
+      ts: "2026-07-26T10:00:00.000Z",
+      window: 200_000,
+      mcp: [{ server_hash: hashPath(`claude_ai_${MARKER}`), tools: 1, loaded_tools: 1, tokens: 9_000 }],
+    });
+    // setContextProfile takes the PARSED type: there is no way to reach the
+    // INSERT with an unsanitized value, which is the point of the signature.
+    setContextProfile(db, clean!);
+    const dump = JSON.stringify([
+      ...(db as Database).query("SELECT * FROM context_profile").all(),
+      ...(db as Database).query("SELECT * FROM sessions").all(),
+    ]);
+    expect(dump).not.toContain(MARKER);
+    expect(dump).not.toContain("/Users");
   });
 
   test("the filename resolver reads the working tree and writes nothing", () => {
@@ -374,6 +440,11 @@ describe("privacy gate", () => {
         why: "the adaptive analyzer's own sentence, length-capped and sanitized (adapt.ts)",
       },
       sync_state: { key: "local kv key", value: "local kv value" },
+      context_profile: {
+        session_id: "IdStr — taken from the parsed profile",
+        server_hash: "Hash16 — sha256/16 of the server's wire segment, hashed at ingest",
+        ts: "IsoTs",
+      },
     };
 
     const db = openDb(":memory:");
@@ -408,6 +479,7 @@ describe("privacy gate", () => {
       "setAutoMemoryBytes", // sessions.auto_memory_bytes — driven above
       "setCacheClock", //      sessions.cache_ttl_ms/cache_model — driven above
       "setClaudeMdBytes", //   sessions.claude_md_bytes  — driven above
+      "setContextProfile", //  sessions.ctx_* + context_profile — typed to the parsed profile; gate driven above
       "setEffortMix", //       sessions.effort_*         — driven above
       "setSkillPack", //       sessions.skill_*          — driven above
       "setSubagentStats", //   sessions.sub_*            — driven above

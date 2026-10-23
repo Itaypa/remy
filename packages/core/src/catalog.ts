@@ -214,9 +214,11 @@ export const TIPS: Record<string, TipDef> = {
     emoji: "🎒",
     title: "Heavy pack before turn one",
     short: "{pct}% context used before turn 1 → audit MCP + CLAUDE.md",
-    problem: "{pct}% of the window was gone before turn one — {first_ctx} of skills, MCP and CLAUDE.md, every session",
+    // "{biggest}" is the mod's attribution ("MCP tool schemas (62k)"); without
+    // the mod the fallback restores the generic list this always said.
+    problem: "{pct}% of the window was gone before turn one — {first_ctx}, mostly {biggest}, every session",
     action: "run /doctor to find what you are not using",
-    what: "{pct}% of the window was full before any work happened ({first_tokens} tokens) — a tax you pay again every session.",
+    what: "{pct}% of the window was full before any work happened ({first_tokens} tokens, mostly {biggest}) — a tax you pay again every session.",
     // The attribution is appended, never substituted: `claude-md-prune` yields
     // to this tip precisely because this sentence already says "prune
     // CLAUDE.md" (rules.ts), and dropping either imperative would leave a user
@@ -236,7 +238,29 @@ export const TIPS: Record<string, TipDef> = {
     // "skill descriptions", not "plugin skills": the measurement sums plugin,
     // personal (~/.claude) and project skills, so naming plugins as the cause
     // would assert something the probe never established.
-    fallbacks: { skill_k: "the other part", first_ctx: "most of it" },
+    fallbacks: { skill_k: "the other part", first_ctx: "most of it", biggest: "skills, MCP and CLAUDE.md" },
+  },
+  "mcp-idle": {
+    id: "mcp-idle",
+    docs: "https://code.claude.com/docs/en/mcp",
+    emoji: "🔌",
+    title: "An MCP server you never called",
+    short: "{server} costs {tokens_k}k a turn, unused → /mcp disable",
+    problem: "{server} parks {tokens_k}k of tool schemas in every turn, and this session never called it once",
+    action: "disable it in /mcp until you need it",
+    // `server` resolves at render time from the stored hash (resolve.ts), the
+    // way `file` does; unresolved, the generic wording stands.
+    // Pre-composed clauses (rules.ts): a session can have one turn, a server
+    // one tool, and "1 turns" is the defect the plural test exists for.
+    fallbacks: { server: "one MCP server", tools_clause: "its tool schemas", turns_clause: "your turns" },
+    what: "{server} loaded {tools_clause} (~{tokens_k}k tokens) into every one of {turns_clause}, and not one call went to it.",
+    fix: "Disable it in /mcp (per project is fine) and re-enable it the day you need it. Connect servers to the projects that use them, not to every session — /context shows what each one costs.",
+    cite: {
+      source: "simonwillison.net",
+      author: "Simon Willison",
+      url: "https://simonwillison.net/2025/Sep/30/designing-agentic-loops/",
+      quote: "Coding agents are really good at running shell commands!",
+    },
   },
   "read-in-slices": {
     id: "read-in-slices",
@@ -253,6 +277,23 @@ export const TIPS: Record<string, TipDef> = {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
       quote: "A single \u201cgo to definition\u201d call replaces what might otherwise be a grep followed by reading multiple candidate files.",
+    },
+  },
+  "noisy-tool": {
+    id: "noisy-tool",
+    docs: "https://code.claude.com/docs/en/costs",
+    emoji: "🔊",
+    title: "One tool keeps flooding the window",
+    short: "{tool} ~{avg_k}k a call → ask it for less",
+    problem: "{tool} returned ~{avg_k}k tokens per call, {calls} times — {total_k}k parked in the window",
+    action: "ask for less: a filter, a range, a page",
+    fallbacks: { tool: "one tool", total_k: "a lot", worst_k: "many" },
+    what: "{tool} returned ~{avg_k}k tokens on each of {calls} calls (worst ~{worst_k}k) — {total_k}k tokens the window then carried for every turn after.",
+    fix: "Ask that tool for less: a filter, a line range, a page size, a text snapshot instead of a screenshot. If it can't be narrowed, run it inside a subagent so only the summary lands in your window.",
+    cite: {
+      source: "Anthropic Engineering",
+      url: "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+      quote: "Each subagent might explore extensively, using tens of thousands of tokens or more, but returns only a condensed, distilled summary.",
     },
   },
   "subagent-offload": {
