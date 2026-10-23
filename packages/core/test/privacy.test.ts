@@ -171,16 +171,18 @@ describe("privacy gate", () => {
     }
   });
 
-  test("the adaptive analyzer is the ONLY outbound path in the codebase", () => {
+  test("inside the binary, the adaptive analyzer is the ONLY outbound path", () => {
     // Everything REMY knows stays in its local DB. The one thing that ever
-    // leaves the process is the adaptive analyzer's prompt (a local `claude -p`
-    // call, disableable), and its payload is whitelisted below. If a second
-    // egress path ever appears, this test is where it must be justified.
+    // leaves the binary is the adaptive analyzer's prompt (a local `claude -p`
+    // call, disableable), and its payload is whitelisted below. The one other
+    // thing that leaves the machine at all is the launcher's daily ping — in
+    // sh, not here, and pinned by the test after this one. If a third egress
+    // path ever appears, this test is where it must be justified.
     //
     // Scans the CLI as well as core: the claim in this test's name is about the
-    // codebase, and a fetch() in the hook path would break the promise exactly
-    // as badly as one in core. The local-binary spawn is a shell exec, not a
-    // socket, so it is not matched.
+    // whole binary, and a fetch() in the hook path would break the promise
+    // exactly as badly as one in core. The local-binary spawn is a shell exec,
+    // not a socket, so it is not matched.
     const roots = [
       join(import.meta.dir, "..", "src"),
       join(import.meta.dir, "..", "..", "cli", "src"),
@@ -256,6 +258,28 @@ describe("privacy gate", () => {
     ]);
     expect(dump).not.toContain(MARKER);
     expect(dump).not.toContain("/Users");
+  });
+
+  test("the launcher's network calls only ever fetch from the release — they send nothing", () => {
+    // bin/remy is the one place REMY touches the network: it downloads the
+    // binary and checksums.txt, and once a day it GETs a one-byte `ping-*`
+    // asset so active installs can be counted. All three must stay downloads
+    // of a release asset. A curl that posts, uploads, sets a header or carries
+    // a body would turn the ping into telemetry, and a URL outside `$BASE`
+    // would be a second destination. Either is the breaking change CLAUDE.md
+    // describes, and this is where it fails.
+    const launcher = join(import.meta.dir, "..", "..", "plugin-claude-code", "bin", "remy");
+    const calls = readFileSync(launcher, "utf8")
+      .split("\n")
+      .filter((l) => /\bcurl\b/.test(l) && !l.trim().startsWith("#") && !/command -v curl/.test(l));
+    expect(calls.length).toBe(3); // binary · checksums.txt · ping
+    for (const line of calls) {
+      expect(line, `not a download: ${line}`).toMatch(/ -o /);
+      expect(line, `sends something: ${line}`).not.toMatch(
+        / -(d|F|T|X|H|u|b|c|K)\b| --(data|data-\w+|form|upload-file|request|header|json|cookie|user|config)\b/,
+      );
+      expect(line, `not addressed to the release: ${line}`).toMatch(/"\$BASE\//);
+    }
   });
 
   test("the filename resolver reads the working tree and writes nothing", () => {

@@ -61,6 +61,16 @@ await $`bun build --compile --minify ${crossCompile} ${defines} packages/cli/src
 console.log(`remy ${version} (${channel}) built for ${target} · ${stamp}`);
 console.log(`  → ${outfile}`);
 
+// A release ships one more asset per target: the one-byte file the launcher
+// GETs once a day. Its GitHub download counter is REMY's entire analytics
+// layer (`bun run analytics`), so a release without it counts nobody. Written
+// next to the binary so a `dist/*` upload carries it with everything else.
+if (channel === "release" && arg("--out")) {
+  const ping = join(dirname(outfile), `ping-${target}`);
+  await Bun.write(ping, "1\n");
+  console.log(`  → ${ping}`);
+}
+
 // `current` is what the statusline command points at, so a fresh dev build
 // goes live everywhere without touching anyone's settings.json.
 if (!arg("--out")) {

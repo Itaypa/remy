@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -107,6 +107,93 @@ describe("plugin launcher", () => {
   test("is valid POSIX sh", async () => {
     const proc = Bun.spawn(["sh", "-n", LAUNCHER], { stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(0);
+  });
+});
+
+// The daily ping is the only thing REMY ever sends anywhere, and it is sent
+// from the launcher, not the binary: a GET for a one-byte asset on this
+// version's release, once per machine per UTC day, carrying nothing. These pin
+// the properties that make it defensible — at most once a day, off when asked,
+// never for a dev build, and a request that names only the release URL.
+describe("the daily ping", () => {
+  const DAY = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const PING_URL = `https://github.com/Itaypa/remy/releases/download/v9.9.9/ping-${TARGET}`;
+  const RAN = "ran: report --week";
+
+  /** A `curl` on PATH that records its argv instead of touching the network. */
+  function shimCurl(): string {
+    const shimDir = join(home, "shim");
+    mkdirSync(shimDir, { recursive: true });
+    const curl = join(shimDir, "curl");
+    writeFileSync(curl, `#!/bin/sh\necho "$*" >> "${join(home, "curl.log")}"\n`);
+    chmodSync(curl, 0o755);
+    return `${shimDir}:${process.env.PATH ?? ""}`;
+  }
+
+  /** The request is detached from the hook, so give it a moment to land. */
+  async function curlCalls(): Promise<string[]> {
+    const log = join(home, "curl.log");
+    for (let i = 0; i < 40 && !existsSync(log); i++) await Bun.sleep(50);
+    try {
+      return (await Bun.file(log).text()).trim().split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  test("pings this version's release once, then never again that day", async () => {
+    installFakeBinary();
+    const PATH = shimCurl();
+    const first = await run({ PATH });
+    expect(first.out.trim()).toBe(RAN); // the hook itself still ran, unhindered
+    await run({ PATH });
+    await run({ PATH });
+    const calls = await curlCalls();
+    expect(calls).toEqual([`-fsSL --max-time 20 -o /dev/null ${PING_URL}`]);
+    expect(existsSync(join(home, "bin", `.ping-${DAY}`))).toBe(true);
+  });
+
+  test("a new day replaces yesterday's stamp instead of piling them up", async () => {
+    installFakeBinary();
+    mkdirSync(join(home, "bin", ".ping-20200101"));
+    await run({ PATH: shimCurl() });
+    await curlCalls();
+    expect(existsSync(join(home, "bin", ".ping-20200101"))).toBe(false);
+    expect(existsSync(join(home, "bin", `.ping-${DAY}`))).toBe(true);
+  });
+
+  const silent: Array<[string, Record<string, string>, () => void]> = [
+    ["REMY_ANALYTICS=0", { REMY_ANALYTICS: "0" }, () => {}],
+    ["REMY_ANALYTICS=false", { REMY_ANALYTICS: "false" }, () => {}],
+    ["the `remy analytics --off` marker", {}, () => writeFileSync(join(home, "analytics-off"), "")],
+  ];
+  for (const [why, env, setup] of silent) {
+    test(`stays silent with ${why} — and still runs the binary`, async () => {
+      installFakeBinary();
+      setup();
+      const { out } = await run({ PATH: shimCurl(), ...env });
+      expect(out.trim()).toBe(RAN);
+      await Bun.sleep(200);
+      expect(existsSync(join(home, "curl.log"))).toBe(false);
+      expect(existsSync(join(home, "bin", `.ping-${DAY}`))).toBe(false);
+    });
+  }
+
+  test("a dev build never pings — there is no release to count it against", async () => {
+    const path = join(home, "bin", `remy-dev-${TARGET}`);
+    writeFileSync(path, '#!/bin/sh\necho "ran: $*"\n');
+    chmodSync(path, 0o755);
+    const { out } = await run({ PATH: shimCurl(), REMY_VERSION: "dev" });
+    expect(out.trim()).toBe(RAN);
+    await Bun.sleep(200);
+    expect(existsSync(join(home, "curl.log"))).toBe(false);
+  });
+
+  test("no binary, no ping — a half-installed plugin counts nobody", async () => {
+    const { code } = await run({ PATH: shimCurl(), REMY_NO_DOWNLOAD: "1" });
+    expect(code).toBe(0);
+    await Bun.sleep(200);
+    expect(existsSync(join(home, "curl.log"))).toBe(false);
   });
 });
 

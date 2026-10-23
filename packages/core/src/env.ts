@@ -16,12 +16,17 @@ export function envFlag(name: string, env: Record<string, string | undefined> = 
   return raw !== "0" && raw !== "false";
 }
 
-/** Where the compiled binaries live — always `~/.remy/bin`, matching the
- * plugin launcher's own resolution (REMY_HOME/COACH_HOME override both).
+/** `~/.remy` — the launcher's home (REMY_HOME/COACH_HOME override both),
+ * resolved exactly the way `bin/remy` resolves it. The compiled binaries and
+ * the launcher's own switches (`analytics-off`) live here.
  * Deliberately NOT dataDir(): an install carried over from the coach era
  * keeps its database in `~/.coach`, and pointing binaries at the data
  * directory put the launcher somewhere no build ever writes. */
+export function remyHome(): string {
+  return envVar("HOME") ?? join(homedir(), ".remy");
+}
+
+/** Where the compiled binaries live — always `~/.remy/bin`. */
 export function binDir(): string {
-  const home = envVar("HOME") ?? join(homedir(), ".remy");
-  return join(home, "bin");
+  return join(remyHome(), "bin");
 }

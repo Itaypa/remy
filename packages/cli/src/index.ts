@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -34,6 +34,7 @@ import {
   dueForContextAlarm,
   dueForStopNudge,
   envVar,
+  remyHome,
   markContextAlarmShown,
   markStopNudgeShown,
   openTips,
@@ -124,6 +125,9 @@ try {
       break;
     case "adapt":
       await adapt(argv.slice(1));
+      break;
+    case "analytics":
+      analytics(argv.slice(1));
       break;
     case "spinner":
       spinner(argv.slice(1));
@@ -590,6 +594,34 @@ function maybeAutoAdapt(db: ReturnType<typeof openDb>): void {
   } catch (err) {
     logError("auto-adapt", err);
   }
+}
+
+/** The daily ping lives in the launcher (`bin/remy`), not in this binary: a
+ * GET for a one-byte asset on this version's GitHub release, once per machine
+ * per UTC day, carrying nothing (CLAUDE.md, "The privacy invariant"). This
+ * command only flips the switch the launcher reads — a marker file in REMY's
+ * home. Off means the launcher never calls curl at all, so there is no "send
+ * less"; there is only nothing. */
+function analytics(args: string[]): void {
+  const marker = join(remyHome(), "analytics-off");
+  if (args.includes("--off")) {
+    mkdirSync(remyHome(), { recursive: true });
+    writeFileSync(marker, "");
+    console.log("📡 daily ping: OFF — the launcher sends nothing, ever");
+    return;
+  }
+  if (args.includes("--on")) {
+    rmSync(marker, { force: true });
+    console.log("📡 daily ping: ON — one payload-free GET a day to this version's GitHub release");
+    return;
+  }
+  const raw = envVar("ANALYTICS");
+  const off = existsSync(marker) || raw === "0" || raw === "false";
+  console.log(
+    `📡 daily ping: ${off ? "off" : "on"} — ` +
+      (off ? "nothing is sent" : "a one-byte GET to this version's GitHub release once a day; no payload, no id") +
+      " · toggle: remy analytics --on/--off",
+  );
 }
 
 async function adapt(args: string[]): Promise<void> {
@@ -1128,7 +1160,7 @@ function help(): void {
     [
       `REMY v${VERSION} — the coaching layer for AI coding agents 🐭`,
       "",
-      "everything stays on this machine — nothing is ever uploaded.",
+      "everything you do stays on this machine — the only network traffic is a payload-free daily ping (remy analytics --off).",
       "",
       "usage: remy <command>",
       "  ingest       (internal) consume a Claude Code hook event from stdin",
@@ -1139,6 +1171,7 @@ function help(): void {
       "  spinner      put your coaching line under Claude Code's spinner (--off to hand it back · --status)",
       "  links        make statusline actions clickable — installs the remy:// click handler (macOS)",
       "  adapt        run the adaptive analyzer now (--on/--off/--status · --model <alias> · --force to bypass the daily budget)",
+      "  analytics    the daily ping that counts active installs — --off to stop it, --on to resume, bare for status",
     ].join("\n"),
   );
 }
