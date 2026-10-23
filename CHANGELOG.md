@@ -38,6 +38,31 @@ today — an alias, so it tracks what the CLI resolves it to), retries once on `
 that fails, and takes `REMY_ADAPT_MODEL` or `remy adapt --model <alias>`; `--status` shows
 which. At one ~2k-token call a day the price difference rounds to nothing on any plan.
 
+**The statusline learns to pace.** The rate-limit field coloured by raw percentage, which is
+the wrong signal: 43% of the 5-hour window with four hours left is a lockout in the making,
+43% with twenty minutes left is headroom about to reset unspent. The host sends `resets_at`
+with the percentage, so `⏳ 43% (5h) ↻2h10m` now compares what you've used with how far
+through the window you are, colours by that (+10 points over the clock yellow, +25 red, 90%
+red regardless), and once over pace swaps the countdown for a forecast — `out in 1h20m`.
+The 7-day window is paced in awake hours (2am plus six hours asleep carry no weight), so a
+night does not read as falling behind every morning. Under pace there is no colour, which is
+its own message: the quota will reset unspent, run the big one now.
+
+**Three more host fields on the HUD.** The model field carries the two dials that multiply
+its price — `🐉 Fable/xhigh ↯fast`, with `max` and the fast marker in yellow. The branch's
+open PR and its review state follow the branch, straight off the host's `pr` object:
+`🔀 #42 ✔`. And the cache clock reads the host's own `prompt_cache.expires_at` when a host
+≥ 2.1.251 sends one, falling back to the transcript-derived TTL and hook-stamped anchor
+otherwise — so a session now has a clock from its first tick, before any hook has run.
+
+**New rule, `cache-miss`.** Claude Code ≥ 2.1.260 diagnoses *why* a request missed its
+cached prefix (`tools_changed`, `system_prompt_changed`, `ttl_expired_5m`, …). The
+statusline copies the count, the re-written tokens and the most frequent cause into the
+session row — write-on-change only, so a quiet session stays read-only — and the rule
+repeats the diagnosis as a tip with a cause-specific remedy from a closed set. One new
+TEXT column, `cache_miss_cause`, charset-gated to the host's snake_case enum shape and
+registered in the privacy suite; `likely_server_side` is deliberately never coached.
+
 Also: `claude plugin validate` is a preflight gate; `.mcp.json`/`~/.claude.json` are read
 (never written) to name a server at render time; the stray 🐀 is a 🐭 everywhere.
 

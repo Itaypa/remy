@@ -122,8 +122,14 @@ suppresses or relabels it; don't spend time hunting for one again.
 `settings.json` → `statusLine.command` runs `remy statusline`; stdin
 carries `session_id`, `transcript_path`, `model.{id,display_name}`,
 `workspace.current_dir`, `cost.total_cost_usd`, `rate_limits.
-{five_hour,seven_day}.used_percentage` (Claude.ai Pro/Max only, absent
-otherwise), and (recent hosts) `context_window.{total_input_tokens,
+{five_hour,seven_day}.{used_percentage,resets_at}` (Claude.ai Pro/Max only,
+absent otherwise; `resets_at` is epoch seconds), `effort.level`
+(`low|medium|high|xhigh|max`, absent on models without the dial),
+`fast_mode`, `pr.{number,url,review_state,kind}` (the footer's PR badge as
+data; `kind: "mr"` for GitLab), `prompt_cache` (≥ 2.1.251 — `warm`,
+`caching_observed`, `ttl`, `expires_at`, `misses`, `miss_recache_tokens`,
+`miss_causes`, `last_miss_cause`; see the cache clock below), and (recent
+hosts) `context_window.{total_input_tokens,
 total_output_tokens,context_window_size,used_percentage,...}`. `remy init`
 also writes `refreshInterval: 1` into the statusLine block — **the unit is
 seconds**, not ms (schema: `v.number().min(1)`, "re-run the status line
@@ -157,18 +163,42 @@ session, the statusline also skips its DB write when nothing changed since
 the last tick, so a quiet session stays read-only.
 
 **One constant layout, always** — no alarm view, no tip/loading view (both
-moved to the Stop-hook nudges above). Fields, in order: model (emoji + name)
-· context (`⚡ 48% ctx ▓▓▓░░` — percent + bar, colored yellow at ≥60% / red
-at ≥80%, but never restructuring the line) · **prompt-cache clock**
-(`🔥 cache 52m` / `🧊 cache cold`, see below) · git branch + dirty marker
-(`🌿 main ●`, the dot spaced and yellow so it isn't read as part of the
-branch name; one `git status --porcelain=v1 --branch` subprocess, absent
-outside a git repo — `gitStatus()` in `cli/src/index.ts`) · one **spend
-field, chosen by plan type — never both**: session cost (`$1.23`) for
-API/pay-per-token accounts, or rate-limit % (`⏳ 42% (5h)`, whichever of the
-5h/7d window is closer to its cap) for Claude.ai Pro/Max subscribers
+moved to the Stop-hook nudges above). Fields, in order: model (emoji + name,
+plus the two dials that multiply its price — `🐉 Fable/xhigh ↯fast`; the
+slash binds the effort level to the model so it can't read as the model's
+name, and only `max` and the fast marker take colour, because those are the
+two settings that cost — `modelField()`) · context (`⚡ 48% ctx ▓▓▓░░` —
+percent + bar, colored yellow at ≥60% / red at ≥80%, but never
+restructuring the line) · **prompt-cache clock** (`🔥 cache 52m` /
+`🧊 cache cold`, see below) · git branch + dirty marker (`🌿 main ●`, the dot
+spaced and yellow so it isn't read as part of the branch name; one
+`git status --porcelain=v1 --branch` subprocess, absent outside a git repo —
+`gitStatus()` in `cli/src/index.ts`) · the branch's **PR** (`🔀 #42 ✔`,
+straight off `payload.pr` — no network call of ours; `!42` for a GitLab MR,
+glyphs ✔ approved / ✘ changes requested / ○ pending / ✎ draft, the number a
+cmd-click link on OSC 8 terminals — `prField()`) · one **spend field, chosen
+by plan type — never both**: session cost (`$1.23`) for API/pay-per-token
+accounts, or **paced rate-limit headroom** for Claude.ai Pro/Max subscribers
 (`payload.rate_limits` present) — `spendField()` in `cli/src/ui.ts`, which
 chains `rateLimitBadge() ?? fmtCost()`. That's the whole line — a pure HUD.
+
+**Pace, not percentage.** `rateLimitBadge()` used to colour by `used_percentage`
+alone, which is the wrong signal: 43% of the 5h window with four hours left
+is a lockout coming, 43% with twenty minutes left is headroom about to reset
+unspent. With `resets_at` the badge knows the window's start (`resets_at −
+5h` / `− 7d`) and compares used% with the share of the window elapsed:
+`⏳ 43% (5h) ↻2h10m` on pace (the dim tail is the countdown to reset), and
+once **+10 points** over the clock the percentage goes yellow and the tail
+becomes the forecast at the current average rate — `⏳ 62% (5h) out in 1h20m`
+(**+25** red; **≥90%** red whatever the pace, one fat turn from the wall).
+The gap between "out in" and the reset is the lockout you are heading for.
+Which window shows: the one furthest ahead of its clock, unless one is past
+90%. The **7-day window is paced in awake hours** — `awakeSeconds()` gives the
+block from 02:00 local plus six hours zero weight, so a night asleep does not
+read as falling behind every morning (the forecast stays wall-clock; it is a
+projection). A host that sends no `resets_at` gets the old behaviour: closest
+to cap, fixed 60/80 colouring, no tail. Under pace there is no colour, and
+that is information too: the quota will reset unspent, run the big one now.
 (A `💡 1 tip` link, the dev build badge, a session cache-hit % field, and
 gamification — XP level, streak — were all tried and dropped; the tip renders
 in the splash and the Stop-hook nudge, the version in `remy version` and the
@@ -217,6 +247,35 @@ half of the same story; this is the half that arrives before the spend.
 
 The statusline itself opens no transcript for any of this — it reads the
 session row it was already fetching.
+
+**The host now has its own clock (≥ 2.1.251).** `payload.prompt_cache` carries
+`warm`, `ttl` (`"5m"|"1h"`) and `expires_at` (epoch seconds) for the main
+conversation's cached prefix. `hostCacheField()` renders from that when it is
+there — exact expiry, no one-response-late anchor, a clock from the session's
+very first tick before any hook has run — and `cacheField()` is the fallback
+for older hosts. Three-way result: a string to render; `null` when the host
+says `caching_observed: false` (nothing is cached, so no clock rather than a
+derived fiction); `undefined` when the object is absent → fall back. The
+per-model cold override stays on top of the host's flag, which describes the
+entry the *last* request touched — a `/model` switch makes the next one miss
+before `warm` has any reason to move.
+
+The same object carries the host's **miss diagnosis**: `misses` (requests
+that re-processed content the cache already held — >5% and ≥2k tokens, with
+no compaction to explain it), `miss_recache_tokens`, `miss_causes` (counts
+by cause) and `last_miss_cause.causes` (`tools_changed`,
+`system_prompt_changed`, `ttl_expired_5m`, `likely_server_side`, …; ≥ 2.1.260).
+`cacheMissesFromPayload()` reduces that to four values — count, tokens, the
+most frequent cause, its count — and the statusline writes them to
+`sessions.cache_miss*` via `setCacheMisses()` **only when the count moves**,
+so the once-a-second steady state stays read-only. The cause is the one new
+TEXT column; it is gated to `[a-z][a-z0-9_]*` (`CacheMissCause` in
+`schema.ts`) and anything else is stored as "no cause" with its count zeroed.
+The `cache-miss` rule (`rules.ts`) fires at two or more misses, repeats the
+diagnosis in plain words with a cause-specific remedy from a closed set,
+never echoes a cause word it has not seen before, never coaches
+`likely_server_side`, and yields to `cache-idle` when the cause is the TTL
+and that rule has already filed the idle-gap story.
 
 ## Spinner tip line (`spinnerTipsOverride`)
 

@@ -33,10 +33,12 @@ you, and he never touches your code.
 
 ## What it does
 
-- **Statusline, in your face** — model, context % with a live bar, git branch, and either
+- **Statusline, in your face** — model (with its effort level and fast-mode marker), context
+  % with a live bar, the prompt-cache clock, git branch and the branch's PR, and either
   your cost or your rate-limit headroom (whichever your plan actually bills you on), right
-  beneath your input box. One constant layout, always — it colors in place (yellow at 60%,
-  red at 80% context) instead of restructuring the line.
+  beneath your input box. The headroom is **paced**: `⏳ 43% (5h) ↻2h10m` is calm, the same
+  43% with four hours to go turns yellow and says `out in 1h20m`. One constant layout,
+  always — it colors in place instead of restructuring the line.
 - **Waste signatures** — deterministic rules (no model calls in the inline path, ever)
   detect auto-compact hits, long edit-heavy sessions without plan mode, retry loops, cache
   expiries, red-zone context turns, and shell reads that should have been tools — each one

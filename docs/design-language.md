@@ -84,7 +84,9 @@ carries an exact number.
   statusline entirely onto the Stop-hook nudge (below). What's left colors
   in place instead of reshaping: the context percentage goes yellow at ≥60%,
   red at ≥80%, but the line keeps its shape. Current fields, in order: model
-  (emoji + name) · context (`⚡ 48% ctx ▓▓▓░░` — percent + bar; the separate
+  (emoji + name, plus the two dials that multiply its price — `🐉 Fable/xhigh
+  ↯fast`; only `max` and the fast marker take colour, because those are the
+  two that cost) · context (`⚡ 48% ctx ▓▓▓░░` — percent + bar; the separate
   `[used/limit 🪙]` token-count badge was dropped as a duplicate of the same
   number) · the prompt-cache clock (`🔥 cache 52m`, yellow under 10 min;
   `🧊 cache cold` in cyan once it expires or the model changes —
@@ -100,12 +102,19 @@ carries an exact number.
   (`🌿 main ●`, the dot spaced off the
   name and yellow so it reads as state rather than as part of the branch;
   from a single `git status --porcelain=v1 --branch` call — absent outside a
-  git repo) · session cost
+  git repo) · the branch's PR and review state (`🔀 #42 ✔`, off the host's
+  own `pr` object) ·
   a **spend field, chosen by plan type — one or the other, never both**:
-  session cost (`$1.23`) for API/pay-per-token accounts, or rate-limit %
-  (`⏳ 42% (5h)`, whichever of the 5h/7d window is closer to its cap) for
-  Claude.ai Pro/Max subscribers (`payload.rate_limits` present) —
-  `spendField()` in `cli/src/ui.ts`. Nothing else: the `💡 1 tip` indicator
+  session cost (`$1.23`) for API/pay-per-token accounts, or rate-limit
+  headroom **paced against the window's clock** for Claude.ai Pro/Max
+  subscribers (`payload.rate_limits` present): `⏳ 43% (5h) ↻2h10m` on pace,
+  the percentage yellow at +10 points over the clock and red at +25 (or past
+  90% regardless), and once over pace the countdown gives way to a forecast,
+  `out in 1h20m`. A raw percentage was the wrong signal — 43% means a lockout
+  with four hours left and free headroom with twenty minutes left — and under
+  pace there is deliberately no colour, because "this will reset unspent" is
+  the moment to run the expensive job. `spendField()` in `cli/src/ui.ts`;
+  mechanics in `docs/claude-code-surfaces.md`. Nothing else: the `💡 1 tip` indicator
   and the dev build badge were dropped as noise (the statusline repaints
   every second, so anything static on it is a permanent banner — the tip
   belongs to the splash and the Stop nudge, the version to `remy version`).
