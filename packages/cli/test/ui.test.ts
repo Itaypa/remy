@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BRAND, HINTS, TIPS, type SessionRow, type TipRow } from "@ccpp/core";
-import { ART, WELCOME_ART, awakeSeconds, bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, hostCacheField, humanDur, linksEnabled, modelEmoji, modelField, prField, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { ART, WELCOME_ART, awakeSeconds, bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, hostCacheField, humanDur, linksEnabled, modelEmoji, modelField, prField, rateLimitBadge, rotatingHint, spendField, splash, tipCard, tipLine, tipLineLong, weekTotals } from "../src/ui";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -48,7 +48,7 @@ describe("tipLine — [Brand]: emoji problem → solution → value", () => {
     // readable; leaking braces onto the statusline is the bug this guards.
     const line = tipLine(tipRow({ evidence: JSON.stringify({ source: "adaptive" }) }));
     expect(line).not.toMatch(/\{\w+\}/);
-    expect(line).toContain("Edit ping-pong on one file");
+    expect(line).toContain("Stuck fixing the same file");
   });
 
   test("evidence-free rendering still keeps the value clause", () => {
@@ -56,18 +56,18 @@ describe("tipLine — [Brand]: emoji problem → solution → value", () => {
       tipRow({ evidence: JSON.stringify({ source: "adaptive" }), est_savings_tokens: 12_000 }),
     );
     expect(line).not.toMatch(/\{\w+\}/);
-    expect(line).toContain(" → +12k 🪙");
+    expect(line).toContain(" → ~12k tokens 🪙");
   });
 
   test("a template whose evidence IS present is untouched by the fallback", () => {
     const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }) }));
     expect(line).toContain("36×");
-    expect(line).not.toContain("Edit ping-pong on one file");
+    expect(line).not.toContain("Stuck fixing the same file");
   });
 
   test("a quantified finding gets a trailing value clause", () => {
     const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }), est_savings_tokens: 165_000 }));
-    expect(line).toContain(" → +165k 🪙");
+    expect(line).toContain(" → ~165k tokens 🪙");
     // problem → solution → value: exactly two arrows once the value clause is present.
     expect((line.match(/→/g) ?? []).length).toBe(2);
   });
@@ -85,7 +85,7 @@ describe("tipLine — [Brand]: emoji problem → solution → value", () => {
 
   test("this is the ONE format used everywhere — statusline, splash, and the Stop-hook nudge all call tipLine()", () => {
     const line = tipLine(tipRow({ evidence: JSON.stringify({ edits: 36 }), est_savings_tokens: 165_000 }));
-    expect(line).toBe(`[${BRAND}]: 🔨 Same file edited 36×, 2+ misses → /clear + re-brief → +165k 🪙`);
+    expect(line).toBe(`[${BRAND}]: 🔨 Stuck editing one file 36× → /clear, explain again → ~165k tokens 🪙`);
   });
 });
 
@@ -135,35 +135,36 @@ describe("earnDollars — the session prices its own findings", () => {
   });
 });
 
-describe("earnClause — money, then coins, then honesty", () => {
+describe("earnClause — money, then tokens, then honesty", () => {
   const def = TIPS["edit-thrash"]!;
 
   test("real money when the session can price it", () => {
     const tip = tipRow({ est_savings_tokens: 100_000, est_class: "input" });
-    expect(earnClause(tip, def, pricedSession())).toBe("saves ≈$1.00");
+    expect(earnClause(tip, def, pricedSession())).toBe("This cost about $1.00.");
   });
 
-  test("large amounts drop the cents — ≈$18 reads, ≈$18.43 pretends", () => {
+  test("large amounts drop the cents — $18 reads, $18.43 pretends", () => {
     const tip = tipRow({ est_savings_tokens: 1_843_000, est_class: "input" });
-    expect(earnClause(tip, def, pricedSession())).toBe("saves ≈$18");
+    expect(earnClause(tip, def, pricedSession())).toBe("This cost about $18.");
   });
 
-  test("falls back to effective coins when the session has no cost", () => {
+  test("falls back to effective tokens when the session has no cost", () => {
     const tip = tipRow({ est_savings_tokens: 2_000_000, est_class: "cache-read" });
     // Effective, not raw: 2M cache-read tokens are 200k of real value, and
     // quoting the raw figure here is what made the old deck unbelievable.
-    expect(earnClause(tip, def, null)).toBe("saves ~200k 🪙");
+    // "tokens" in words: the coin is decoration a beginner can ignore.
+    expect(earnClause(tip, def, null)).toBe("That's about 200k tokens 🪙.");
   });
 
-  test("sub-cent findings fall through to coins rather than rendering ≈$0.00", () => {
+  test("sub-cent findings fall through to tokens rather than rendering $0.00", () => {
     const tip = tipRow({ est_savings_tokens: 100, est_class: "input" });
-    expect(earnClause(tip, def, pricedSession())).toBe("saves ~100 🪙");
+    expect(earnClause(tip, def, pricedSession())).toBe("That's about 100 tokens 🪙.");
   });
 
   test("a finding with no token value says what it IS worth", () => {
     const noVerify = TIPS["no-verify"]!;
     const tip = tipRow({ tip_id: "no-verify", est_savings_tokens: 0 });
-    expect(earnClause(tip, noVerify, pricedSession())).toBe("worth: fewer bugs, not fewer tokens");
+    expect(earnClause(tip, noVerify, pricedSession())).toBe("What you gain: fewer bugs, not saved tokens.");
   });
 
   test("and a wisdom tip with neither says nothing at all", () => {
@@ -173,53 +174,93 @@ describe("earnClause — money, then coins, then honesty", () => {
   });
 });
 
-describe("tipLineLong — evidence you recognize → what to do → what it's worth", () => {
-  test("composes all three parts, in that order", () => {
-    const tip = tipRow({
-      evidence: JSON.stringify({ files: 1, edits: 14, rereads: 19, next: 15 }),
-      est_savings_tokens: 100_000,
-      est_class: "input",
-    });
+const THRASH = { files: 1, edits: 14, rereads: 19, next: 15 };
+
+describe("tipCard — What happened / Why it matters / How to fix", () => {
+  test("three labeled rows, in that order, under the tip's plain title", () => {
+    const tip = tipRow({ evidence: JSON.stringify(THRASH), est_savings_tokens: 100_000, est_class: "input" });
+    const card = tipCard(tip, pricedSession(), { file: "index.ts" });
+    const lines = card.split("\n");
+    expect(lines[0]).toBe(`[${BRAND}] 🔨 Stuck fixing the same file`);
+    const labels = lines.slice(1).map((l) => l.slice(2, 18).trim()).filter(Boolean);
+    expect(labels).toEqual(["What happened", "Why it matters", "How to fix"]);
+  });
+
+  test("each part reads as a sentence, and the cost sits with why it matters", () => {
+    const tip = tipRow({ evidence: JSON.stringify(THRASH), est_savings_tokens: 100_000, est_class: "input" });
+    const flat = tipCard(tip, pricedSession(), { file: "index.ts" }).replace(/\s+/g, " ");
+    expect(flat).toContain("What happened Claude edited index.ts 14 times, re-reading it 19 times in between.");
+    expect(flat).toContain("Why it matters Every new try re-sends all the failed tries before it. This cost about $1.00.");
+    expect(flat).toContain("How to fix Type /clear, then explain the problem again in a sentence or two.");
+  });
+
+  test("lines wrap to fit an 80-column terminal", () => {
+    const tip = tipRow({ evidence: JSON.stringify(THRASH), est_savings_tokens: 100_000 });
+    for (const line of tipCard(tip, pricedSession(), { file: "packages/cli/src/index.ts" }).split("\n")) {
+      expect(line.length, line).toBeLessThanOrEqual(80);
+    }
+  });
+
+  test("a tip that buys something other than tokens says what you gain", () => {
+    const tip = tipRow({ tip_id: "no-verify", evidence: JSON.stringify({ edits: 9, scope: "3 files" }), est_savings_tokens: 0 });
+    expect(tipCard(tip, pricedSession()).replace(/\s+/g, " ")).toContain("What you gain: fewer bugs, not saved tokens.");
+  });
+
+  test("an adaptive row with no numbers uses the coach's own sentence, never braces", () => {
+    const tip = tipRow({ evidence: JSON.stringify({ source: "adaptive" }), why: "you rewrote one file 14 times this week" });
+    const card = tipCard(tip, pricedSession());
+    expect(card).not.toMatch(/\{\w+\}/);
+    expect(card).toContain("You rewrote one file 14 times this week.");
+  });
+
+  test("an unknown id still renders, without crashing", () => {
+    expect(tipCard(tipRow({ tip_id: "does-not-exist" }))).toBe(`[${BRAND}] 💡 /remy for your session report`);
+  });
+});
+
+describe("tipLineLong — the same three parts on one line, for the spinner", () => {
+  test("what happened — why it matters (cost) → how to fix", () => {
+    const tip = tipRow({ evidence: JSON.stringify(THRASH), est_savings_tokens: 100_000, est_class: "input" });
     expect(tipLineLong(tip, pricedSession(), { file: "packages/cli/src/index.ts" })).toBe(
-      `[${BRAND}]: 🔨 packages/cli/src/index.ts took 14 edits with 19 re-reads between them` +
-        ` → /clear and re-brief rather than attempt 15 → saves ≈$1.00`,
+      `[${BRAND}]: 🔨 Claude edited packages/cli/src/index.ts 14 times, re-reading it 19 times in between` +
+        ` — every new try re-sends all the failed tries before it (≈$1.00)` +
+        ` → type /clear, then explain the problem again in a sentence or two`,
     );
   });
 
   test("an unresolved filename degrades to the catalog's wording, never a placeholder", () => {
-    const tip = tipRow({
-      evidence: JSON.stringify({ files: 1, edits: 14, rereads: 19, next: 15 }),
-      est_savings_tokens: 100_000,
-    });
+    const tip = tipRow({ evidence: JSON.stringify(THRASH), est_savings_tokens: 100_000 });
     const line = tipLineLong(tip, pricedSession());
     expect(line).not.toMatch(/\{\w+\}/);
-    expect(line).toContain("one file took 14 edits");
+    expect(line).toContain("Claude edited one file 14 times");
   });
 
-  test("a wisdom tip has no problem half and falls back to short", () => {
+  test("a wisdom tip renders all three parts too", () => {
     const tip = tipRow({ tip_id: "clear-between-tasks", evidence: "{}" });
     expect(tipLineLong(tip, pricedSession())).toBe(
-      `[${BRAND}]: 🚿 New task, old context → /clear between unrelated tasks`,
+      `[${BRAND}]: 🚿 You started a new task in the same chat — every message still pays for the old task's history` +
+        ` → type /clear when you switch to something unrelated; it's free`,
     );
   });
 
   test("an unknown id still renders a bracketed, non-crashing line", () => {
-    expect(tipLineLong(tipRow({ tip_id: "does-not-exist" }))).toBe(
-      `[${BRAND}]: 💡 /remy for your session report`,
-    );
+    expect(tipLineLong(tipRow({ tip_id: "does-not-exist" }))).toBe(`[${BRAND}]: 💡 /remy for your session report`);
   });
 });
 
-describe("contextAlarmLine — moved off the statusline, onto the Stop-hook nudge", () => {
-  test("same [Brand]: format as tipLine(), names the numbers", () => {
-    const line = contextAlarmLine(92, 184_000);
-    expect(line.startsWith(`[${BRAND}]: `)).toBe(true);
-    expect(line).toContain("92%");
-    expect(line).toContain("184k 🪙");
+describe("contextAlarmLine — the overflow warning, in the same three-part shape", () => {
+  test("names the numbers in plain words, and says what to do", () => {
+    const card = contextAlarmLine(92, 184_000);
+    const lines = card.split("\n");
+    expect(lines[0]).toBe(`[${BRAND}] ⚠️ Claude's memory is almost full`);
+    const flat = card.replace(/\s+/g, " ");
+    expect(flat).toContain("This chat is using 92% of Claude's memory (184k tokens).");
+    expect(flat).toContain("Why it matters");
+    expect(flat).toContain("How to fix Type /compact at a good stopping point");
   });
 
-  test("matches the exact requested format", () => {
-    expect(contextAlarmLine(100, 200_000)).toBe(`[${BRAND}]: context at 100% — every reply re-reads 200k 🪙`);
+  test("no insider words", () => {
+    expect(contextAlarmLine(100, 200_000)).not.toMatch(/context window|re-reads|🪙/);
   });
 });
 

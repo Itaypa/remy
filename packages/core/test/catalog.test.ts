@@ -24,7 +24,7 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
     shell: "18 shell runs",
     bash_mix: "9 git, 4 file reads",
   },
-  "context-tax": { pct: 48, first_tokens: 96_000, first_ctx: "96k", skill_k: "~2.5k tokens", biggest: "MCP tool schemas (62k)" },
+  "context-tax": { pct: 48, first_tokens: 96_000, first_ctx: "96k", skill_k: "~2.5k tokens", biggest: "MCP add-on instructions (62k)" },
   "mcp-idle": { server: "claude_ai_Gmail", tokens_k: 24, tools_clause: "30 tool schemas", turns_clause: "41 turns", idle_servers: 2 },
   "subagent-offload": { reads: 42, ctx_pct: 95 },
   "read-in-slices": { count: 5, worst_k: 118, total_k: 640, file: "packages/cli/src/index.ts" },
@@ -32,7 +32,7 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "model-fit": { n: 12, total: 20, tier: "opus", model: "opus-5[1m]" },
   "tools-over-bash": { count: 42, bash_total: 420, tool_reads: 132 },
   "claude-md-missing": { files: 8, worst: 12, file: "packages/core/src/rules.ts" },
-  "claude-md-prune": { kb: 128, md_tokens: "32k" },
+  "claude-md-prune": { kb: 128, md_tokens: "~32k tokens" },
   // Wisdom tips carry no placeholders — empty evidence renders them as-is.
   "clear-between-tasks": {},
   "context-band": { turns: 12, total_turns: 210, peak_pct: 97 },
@@ -41,12 +41,12 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "cli-over-mcp": {},
   "rule-of-five": {},
   "spec-first": {},
-  "cache-idle": { count: 3, mins: 145, gap: "2.4h", ctx: "190k" },
+  "cache-idle": { count: 3, mins: 145, gap: "2.4h", ctx: "~190k tokens" },
   "cache-miss": {
     count: 12,
-    cause: "the 5-min cache expired between turns",
-    ctx: "190k",
-    remedy: "set promptCacheTtl to 1h, or keep turns under 5 min apart",
+    cause: "you paused more than 5 minutes between messages",
+    ctx: "~190k tokens",
+    remedy: "reply within 5 minutes, or set promptCacheTtl to 1h in settings",
   },
   "cache-clock": {},
   "plan-review": {},
@@ -59,8 +59,10 @@ describe("tip catalog", () => {
       expect(def.emoji.length).toBeGreaterThan(0);
       expect(def.title.length).toBeGreaterThan(0);
       expect(def.short.length).toBeGreaterThan(0);
-      expect(def.what.length).toBeGreaterThan(0);
-      expect(def.fix.length).toBeGreaterThan(0);
+      // The three parts every surface renders, rule tip or wisdom tip alike.
+      expect(def.problem.length, `${key} has no "what happened"`).toBeGreaterThan(0);
+      expect(def.impact.length, `${key} has no "why it matters"`).toBeGreaterThan(0);
+      expect(def.action.length, `${key} has no "how to fix"`).toBeGreaterThan(0);
     }
   });
 
@@ -104,10 +106,12 @@ describe("tip catalog", () => {
       const rendered = renderTemplate(def.short, { ...evidence!, est: "999k" });
       expect(rendered, `unresolved placeholder in ${key} short`).not.toMatch(/\{\w+\}/);
       expect(rendered.length, `${key} short too long: "${rendered}"`).toBeLessThanOrEqual(55);
-      const what = renderTemplate(def.what, { ...evidence!, est: "999k" });
-      expect(what, `unresolved placeholder in ${key} what`).not.toMatch(/\{\w+\}/);
-      const fix = renderTemplate(def.fix, { ...evidence!, est: "999k" });
-      expect(fix, `unresolved placeholder in ${key} fix`).not.toMatch(/\{\w+\}/);
+      for (const field of ["problem", "impact", "action", "detail"] as const) {
+        const tpl = def[field];
+        if (!tpl) continue;
+        const out = renderTemplate(tpl, { ...def.fallbacks, ...evidence! });
+        expect(out, `unresolved placeholder in ${key} ${field}`).not.toMatch(/\{\w+\}/);
+      }
     }
   });
 
@@ -122,33 +126,78 @@ describe("tip catalog", () => {
   // below and the price class do that — but everything here would have caught
   // a tip with no evidence, no action, or a hand-written price.
 
-  test("every rule-backed tip is problem → action, with evidence in the problem", () => {
+  test("every tip is What happened → Why it matters → How to fix", () => {
     for (const [key, def] of Object.entries(TIPS)) {
-      if (def.adaptiveOnly) continue;
-      expect(def.problem, `missing problem copy for ${key}`).toBeDefined();
-      expect(def.action, `missing action copy for ${key}`).toBeDefined();
-      // A problem with no placeholder cannot be about THIS session — it is a
-      // slogan, which is what `short` is for.
-      expect(def.problem!, `${key} problem cites no evidence`).toMatch(/\{\w+\}/);
+      const vars = { ...def.fallbacks, ...SAMPLE_EVIDENCE[key]! };
+      const problem = renderTemplate(def.problem, vars);
+      const impact = renderTemplate(def.impact, vars);
+      const action = renderTemplate(def.action, vars);
 
-      const problem = renderTemplate(def.problem!, SAMPLE_EVIDENCE[key]!);
-      const action = renderTemplate(def.action!, SAMPLE_EVIDENCE[key]!);
-      expect(problem, `unresolved placeholder in ${key} problem`).not.toMatch(/\{\w+\}/);
-      expect(action, `unresolved placeholder in ${key} action`).not.toMatch(/\{\w+\}/);
-      expect(problem, `${key} problem carries no number from the evidence`).toMatch(/\d/);
+      if (!def.adaptiveOnly) {
+        // A problem with no placeholder cannot be about THIS session — it is a
+        // slogan, which is what `short` is for.
+        expect(def.problem, `${key} problem cites no evidence`).toMatch(/\{\w+\}/);
+        expect(problem, `${key} problem carries no number from the evidence`).toMatch(/\d/);
+      }
+      // The impact is the mechanism, not a measurement: the renderer appends the
+      // cost right after it, and a session number beside that one would compete.
+      // Durable ratios ("10× cheaper", "20× more") are the mechanism, so allowed.
+      expect(def.impact, `${key} impact carries a placeholder — the cost sentence owns numbers`).not.toMatch(/\{\w+\}/);
+      expect(impact.replace(/\d+×/g, ""), `${key} impact carries a number`).not.toMatch(/\d/);
 
-      // The value clause is the renderer's job. A tip that writes its own
-      // price can claim anything, which is precisely how "+219M 🪙" survived.
-      for (const [half, text] of [["problem", problem], ["action", action]] as const) {
-        expect(text, `${key} ${half} embeds the brand tag`).not.toContain(BRAND);
-        expect(text, `${key} ${half} prices itself in coins`).not.toContain("🪙");
-        expect(text, `${key} ${half} prices itself in dollars`).not.toContain("$");
+      // The cost, the separators and the tag are the renderer's job. A tip that
+      // writes its own price can claim anything, which is how "+219M 🪙" shipped.
+      for (const [part, text] of [["problem", problem], ["impact", impact], ["action", action]] as const) {
+        expect(text, `${key} ${part} embeds the brand tag`).not.toContain(BRAND);
+        expect(text, `${key} ${part} prices itself in coins`).not.toContain("🪙");
+        expect(text, `${key} ${part} prices itself in dollars`).not.toContain("$");
+        expect(text, `${key} ${part} carries an arrow — the renderer joins the parts`).not.toContain("→");
       }
 
-      // Composed length, since that is what a developer actually reads:
-      // "[🐭 REMY]: 🔨 {problem} → {action} → saves ≈$0.40".
-      const composed = `${problem} → ${action}`;
-      expect(composed.length, `${key} composed line too long: "${composed}"`).toBeLessThanOrEqual(140);
+      // Each part reads as one clause a beginner can take in at a glance, and
+      // the one-line spinner form stays short enough to read before it rotates.
+      expect(problem.length, `${key} problem too long: "${problem}"`).toBeLessThanOrEqual(120);
+      expect(impact.length, `${key} impact too long: "${impact}"`).toBeLessThanOrEqual(95);
+      expect(action.length, `${key} action too long: "${action}"`).toBeLessThanOrEqual(100);
+      const oneLine = `${problem} — ${impact} (≈$0.40) → ${action}`;
+      expect(oneLine.length, `${key} one-line form too long: "${oneLine}"`).toBeLessThanOrEqual(260);
+    }
+  });
+
+  // Words a first-week Claude Code user does not know. Every one of these was
+  // in the copy before the rewrite, and users said they did not understand it.
+  // Citations are exempt: a quote is what its author said.
+  const JARGON = [
+    /context window/i,
+    /\bthe window\b/i,
+    /red zone/i,
+    /\bprefix\b/i,
+    /schema/i,
+    /re-brief/i,
+    /cache-write/i,
+    /\bturn one\b/i,
+    /ephemeral/i,
+    /context rot/i,
+    /\bre-?deriv/i,
+    /\bfat (session|context)\b/i,
+  ];
+
+  test("no tip or hint uses the jargon users didn't understand", () => {
+    const texts: Array<[string, string]> = [];
+    for (const [key, def] of Object.entries(TIPS)) {
+      const vars = { ...def.fallbacks, ...SAMPLE_EVIDENCE[key]! };
+      for (const field of ["title", "short", "problem", "impact", "action", "detail", "worth"] as const) {
+        const tpl = def[field];
+        if (tpl) texts.push([`${key}.${field}`, renderTemplate(tpl, vars)]);
+      }
+      for (const [k, v] of Object.entries(def.fallbacks ?? {})) texts.push([`${key}.fallbacks.${k}`, v]);
+    }
+    // Attributed quotes ("💬 …") are someone else's words; advice hints are ours.
+    for (const hint of HINTS) if (!hint.startsWith("💬")) texts.push(["hint", hint]);
+    for (const [where, text] of texts) {
+      for (const word of JARGON) {
+        expect(text, `${where} uses jargon ${word}: "${text}"`).not.toMatch(word);
+      }
     }
   });
 
@@ -183,7 +232,7 @@ describe("tip catalog", () => {
     // spinner deck. The old suite passed it because its sample evidence used
     // comfortable two-digit counts and nothing ever tried a 1.
     const PLURALS =
-      /\b1 (files|edits|reads|replies|turns|sessions|calls|runs|tool calls|shell runs|other files|file reads)\b|\bone of them\b/;
+      /\b1 (files|edits|reads|replies|turns|sessions|calls|runs|times|tool calls|shell runs|other files|file reads|shell commands)\b|\bone of them\b/;
     for (const [key, def] of Object.entries(TIPS)) {
       if (def.adaptiveOnly) continue;
       const floors = RULE_FLOORS[key] ?? {};
@@ -193,7 +242,7 @@ describe("tip catalog", () => {
           typeof v === "number" ? (floors[k] ?? 1) : v,
         ]),
       );
-      for (const half of [def.problem!, def.action!, def.short, def.what]) {
+      for (const half of [def.problem, def.impact, def.action, def.short, def.detail ?? ""]) {
         const rendered = renderTemplate(half, { ...def.fallbacks, ...ones });
         expect(rendered, `${key} renders a plural noun against a count of 1: "${rendered}"`).not.toMatch(
           PLURALS,
@@ -202,56 +251,52 @@ describe("tip catalog", () => {
     }
   });
 
-  test("no fix carries a placeholder the adaptive analyzer can't fill", () => {
+  test("no impact, action or detail carries a placeholder the adaptive analyzer can't fill", () => {
     // The adaptive analyzer files rows for ANY catalog id with evidence
     // {"source":"adaptive"} and no session numbers (adapt.ts). It always writes
-    // a `why`, which the report substitutes for `what` — but `fix` is rendered
-    // unconditionally (ui.ts) and through renderTemplate, which has no title
-    // fallback to hide a stray placeholder. So an unfilled key in `fix` is a
-    // literal "{skill_k}" in front of a real user.
-    // This held by accident until now (no fix had a placeholder at all);
-    // `fallbacks` is what makes it hold on purpose.
+    // a `why`, which replaces "What happened" — but the other parts render
+    // through renderTemplate with no title fallback to hide a stray
+    // placeholder. `fallbacks` is what keeps "{skill_k}" away from a real user.
     for (const [key, def] of Object.entries(TIPS)) {
-      const rendered = renderTemplate(def.fix, { ...def.fallbacks, source: "adaptive", est: "999k" });
-      expect(rendered, `${key} fix leaves a placeholder on an adaptive row — add a fallback`).not.toMatch(
-        /\{\w+\}/,
-      );
+      for (const field of ["impact", "action", "detail"] as const) {
+        const tpl = def[field];
+        if (!tpl) continue;
+        const rendered = renderTemplate(tpl, { ...def.fallbacks, source: "adaptive" });
+        expect(rendered, `${key} ${field} leaves a placeholder on an adaptive row — add a fallback`).not.toMatch(
+          /\{\w+\}/,
+        );
+      }
     }
   });
 
   test("context-tax renders whole sentences against evidence written before skill_k existed", () => {
     // The migration case: tips persist, and tips.ts refreshes a row's evidence
     // only when the same rule fires again. Every context-tax row already in a
-    // user's DB carries exactly {pct, first_tokens} — adding a placeholder to
-    // the copy without a fallback would render "{skill_k}" in /remy until the
-    // rule happened to re-fire.
+    // user's DB carries exactly {pct, first_tokens}.
     const def = TIPS["context-tax"]!;
     const legacy = { pct: 48, first_tokens: 96_000 };
-    for (const tpl of [def.what, def.fix, def.short, def.problem!, def.action!]) {
+    for (const tpl of [def.short, def.problem, def.impact, def.action, def.detail!]) {
       expect(renderTemplate(tpl, { ...def.fallbacks, ...legacy })).not.toMatch(/\{\w+\}/);
     }
   });
 
   test("a fallback never wins over a real measurement", () => {
     const def = TIPS["context-tax"]!;
-    const measured = renderTemplate(def.fix, { ...def.fallbacks, skill_k: "~9.9k tokens" });
+    const measured = renderTemplate(def.detail!, { ...def.fallbacks, skill_k: "~9.9k tokens" });
     expect(measured).toContain("~9.9k tokens");
-    expect(measured).not.toContain(def.fallbacks!.skill_k!);
   });
 
-  test("context-tax still gets CLAUDE.md and the tool surface dealt with", () => {
+  test("context-tax still gets CLAUDE.md and the add-on surface dealt with", () => {
     // claude-md-prune is dropped whenever context-tax fires (rules.ts), and the
-    // reason is that this fix already gets CLAUDE.md handled. It used to say
-    // "prune CLAUDE.md" in those words; it now hands off to /doctor, which
-    // trims it. The yield still holds, so this asserts the PROPERTY rather than
-    // the wording — losing either half would leave a user with a bloated
-    // CLAUDE.md and a heavy pack told the numbers and never told to act.
-    const fix = TIPS["context-tax"]!.fix;
-    expect(fix, "must still direct the user at CLAUDE.md").toMatch(/CLAUDE\.md/);
-    expect(fix, "must still direct the user at the tool/skill surface").toMatch(/MCP servers|skills/);
-    // And the measured number survives the handoff: a host command may replace
-    // an instruction we could not verify, never a figure we measured.
-    expect(fix).toContain("{skill_k}");
+    // reason is that this action already gets CLAUDE.md handled. Losing either
+    // half would leave a user with a bloated CLAUDE.md and a heavy start told
+    // the numbers and never told to act.
+    const action = TIPS["context-tax"]!.action;
+    expect(action, "must still direct the user at CLAUDE.md").toMatch(/CLAUDE\.md/);
+    expect(action, "must still direct the user at the add-on/skill surface").toMatch(/MCP add-ons|skills/);
+    // And the measured number survives: a host command may replace an
+    // instruction we could not verify, never a figure we measured.
+    expect(TIPS["context-tax"]!.detail).toContain("{skill_k}");
   });
 
   test("short is Problem → Solution — no brand tag, no value clause, no {est}", () => {

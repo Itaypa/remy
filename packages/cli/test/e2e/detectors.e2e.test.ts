@@ -74,8 +74,8 @@ describe("what the developer actually sees at the end of a turn", () => {
 
     expect(message).toBeTruthy();
     expect(message).toContain("REMY");
-    // The nudge is the active tip, not some other one from the queue.
-    expect(message).toContain("🪙");
+    // Tip or overflow alarm, the nudge always ends in something to do.
+    expect(message).toContain("How to fix");
   });
 
   test("a well-driven session is never interrupted", async () => {

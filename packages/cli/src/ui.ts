@@ -254,20 +254,34 @@ export function earnDollars(
  * Order of preference: real money, then effective 🪙 when the session has no
  * cost recorded, then the catalog's `worth` for the findings whose payoff
  * genuinely isn't tokens, then nothing at all. */
-export function earnClause(
-  tip: TipRow,
-  def: TipDef,
-  session: TipLineSession,
-): string | null {
+export interface Earn {
+  /** Full sentence for the three-line card: "This cost about $0.40." */
+  sentence: string;
+  /** Compact form for one-line surfaces: "≈$0.40", "~12k tokens 🪙". */
+  compact: string;
+}
+
+export function earnOf(tip: TipRow, def: TipDef, session: TipLineSession): Earn | null {
   const dollars = earnDollars(tip.est_savings_tokens, tip.est_class, session);
-  if (dollars != null) {
-    // Below a cent there is no honest way to render it, and "≈$0.00" reads as
-    // a bug. Fall through to the coin figure, which still has resolution.
-    if (dollars >= 0.01) return `saves ≈$${dollars < 10 ? dollars.toFixed(2) : Math.round(dollars)}`;
+  // Below a cent there is no honest way to render it, and "≈$0.00" reads as a
+  // bug. Fall through to the token figure, which still has resolution.
+  if (dollars != null && dollars >= 0.01) {
+    const money = `$${dollars < 10 ? dollars.toFixed(2) : Math.round(dollars)}`;
+    return { sentence: `This cost about ${money}.`, compact: `≈${money}` };
   }
   const effective = effectiveTokens(tip.est_savings_tokens, (tip.est_class as EstClass) ?? "input");
-  if (effective > 0) return `saves ~${fmtTok(effective)} 🪙`;
-  return def.worth ? `worth: ${def.worth}` : null;
+  if (effective > 0) {
+    // The coin is decoration next to a number a beginner can read on its own.
+    const tokens = `${fmtTok(effective)} tokens 🪙`;
+    return { sentence: `That's about ${tokens}.`, compact: `~${tokens}` };
+  }
+  if (def.worth) return { sentence: `What you gain: ${def.worth}.`, compact: `gain: ${def.worth}` };
+  return null;
+}
+
+/** The cost as one sentence, for callers that only want the words. */
+export function earnClause(tip: TipRow, def: TipDef, session: TipLineSession): string | null {
+  return earnOf(tip, def, session)?.sentence ?? null;
 }
 
 /** Below this, the field goes yellow: the cache is nearly out and wrapping up
@@ -550,27 +564,58 @@ export function tipLine(tip: TipRow): string {
   // price it with. Effective tokens rather than raw, so it can never disagree
   // with what the wide form says about the same finding.
   const effective = effectiveTokens(tip.est_savings_tokens, (tip.est_class as EstClass) ?? "input");
-  const value = effective > 0 ? ` → +${fmtTok(effective)} 🪙` : "";
+  const value = effective > 0 ? ` → ~${fmtTok(effective)} tokens 🪙` : "";
   return `[${BRAND}]: ${def.emoji} ${tipBody(tip, def)}${value}`;
 }
 
-/** The wide-surface line, and the shape the whole catalog is written to:
+/** "claude edited x" → "Claude edited x." — catalog fields are written as
+ * clauses so they compose on one line; the card shows them as sentences. */
+function sentence(s: string): string {
+  const head = capFirst(s.trim());
+  if (!head) return head;
+  return /[.!?]$/.test(head) ? head : `${head}.`;
+}
+
+function capFirst(s: string): string {
+  return /^[a-z]/.test(s) ? s[0]!.toUpperCase() + s.slice(1) : s;
+}
+
+/** The three parts of a tip, rendered against its evidence: what happened,
+ * why it matters, how to fix. `problem` falls back to the adaptive coach's own
+ * sentence, then to the title, when the row cannot fill its placeholders. */
+function tipParts(
+  tip: TipRow,
+  def: TipDef,
+  extra: Record<string, string | number>,
+): { problem: string; impact: string; action: string } {
+  let evidence: Record<string, string | number> = {};
+  try {
+    evidence = tip.evidence ? JSON.parse(tip.evidence) : {};
+  } catch {
+    // evidence is display-only
+  }
+  const vars = tipVars(def, evidence, extra);
+  const fill = (tpl: string) => renderTemplate(tpl, vars);
+  const problem = fill(def.problem);
+  return {
+    problem: UNRESOLVED_PLACEHOLDER.test(problem) ? (tip.why ?? def.title) : problem,
+    impact: fill(def.impact),
+    action: fill(def.action),
+  };
+}
+
+/** The one-line form, for surfaces that can only show one line (the spinner
+ * deck under `Forging…`):
  *
- *   [🐭 REMY]: 🔨 packages/cli/src/index.ts took 14 edits with 19 re-reads
- *              between them → /clear and re-brief before attempt 15 → saves ≈$0.40
+ *   [🐭 REMY]: 🔨 Claude edited index.ts 14 times, re-reading it 17 times in
+ *   between — every new try re-sends all the failed tries before it (≈$0.40)
+ *   → type /clear, then explain the problem again in a sentence or two
  *
- * — evidence you recognize, the thing to do, and what it's worth. Used by the
- * spinner deck and the Stop-hook nudge, both of which have the full terminal
- * width; `tipLine()` stays the narrow form for the boxed splash.
- *
- * `extra` carries the two values the renderer cannot derive from the row
- * alone: `file`, resolved from the stored hash by whoever has the working tree
- * in front of them (resolve.ts), and anything else a caller has measured. Left
- * out, the catalog's `fallbacks` put the old generic wording back, which is the
- * whole reason this degrades quietly instead of printing a `{placeholder}`.
- *
- * Wisdom tips have no session evidence, so they have no `problem` half and
- * fall back to `short` — which is why this can't simply replace tipLine(). */
+ * Same three parts as tipCard(), in the same order, with the cost beside the
+ * impact it measures. `extra` carries what the renderer cannot derive from the
+ * row alone: `file`, resolved from the stored hash by whoever has the working
+ * tree in front of them (resolve.ts). Left out, the catalog's `fallbacks`
+ * restore generic wording rather than printing a `{placeholder}`. */
 export function tipLineLong(
   tip: TipRow,
   session?: TipLineSession,
@@ -578,18 +623,65 @@ export function tipLineLong(
 ): string {
   const def = TIPS[tip.tip_id];
   if (!def) return `[${BRAND}]: 💡 /remy for your session report`;
-  const template = def.problem && def.action ? `${def.problem} → ${def.action}` : def.short;
-  const body = tipBody(tip, def, template, extra);
-  const earn = earnClause(tip, def, session);
-  return `[${BRAND}]: ${def.emoji} ${body}${earn ? ` → ${earn}` : ""}`;
+  const p = tipParts(tip, def, extra);
+  const earn = earnOf(tip, def, session);
+  return `[${BRAND}]: ${def.emoji} ${capFirst(p.problem)} — ${p.impact}${earn ? ` (${earn.compact})` : ""} → ${p.action}`;
 }
 
-/** "[🐭 REMY]: context at 92% — every reply re-reads 184k 🪙" — the
- * context-overflow alarm, moved off the statusline (it used to replace the
- * whole line at ctx>=80%) onto the Stop-hook nudge, so the statusline stays
- * one constant layout. Same [Brand]: format as tipLine(). */
+/** Labels for the three-line card, padded to one column. */
+const CARD_LABELS = ["What happened", "Why it matters", "How to fix"] as const;
+const CARD_LABEL_W = 16; // "What's happening", the alarm's first label
+/** Wrap width for the card's text column — a Stop nudge is full terminal
+ * width, but most terminals open at 80 columns. */
+const CARD_TEXT_W = 60;
+
+function card(header: string, rows: [string, string][]): string {
+  const lines = [header];
+  for (const [label, text] of rows) {
+    wrap(text, CARD_TEXT_W).forEach((t, i) => lines.push(`  ${(i === 0 ? label : "").padEnd(CARD_LABEL_W)} ${t}`));
+  }
+  return lines.join("\n");
+}
+
+/** The end-of-turn nudge, and the shape the whole catalog is written to:
+ *
+ *   [🐭 REMY] 🔨 Stuck fixing the same file
+ *     What happened   Claude edited index.ts 14 times, re-reading it 17
+ *                     times in between.
+ *     Why it matters  Every new try re-sends all the failed tries before
+ *                     it. This cost about $0.40.
+ *     How to fix      Type /clear, then explain the problem again in a
+ *                     sentence or two.
+ *
+ * Plain labels so a first-week user never has to decode an arrow chain. */
+export function tipCard(
+  tip: TipRow,
+  session?: TipLineSession,
+  extra: Record<string, string | number> = {},
+): string {
+  const def = TIPS[tip.tip_id];
+  if (!def) return `[${BRAND}] 💡 /remy for your session report`;
+  const p = tipParts(tip, def, extra);
+  const earn = earnOf(tip, def, session);
+  return card(`[${BRAND}] ${def.emoji} ${def.title}`, [
+    [CARD_LABELS[0], sentence(p.problem)],
+    [CARD_LABELS[1], `${sentence(p.impact)}${earn ? ` ${earn.sentence}` : ""}`],
+    [CARD_LABELS[2], sentence(p.action)],
+  ]);
+}
+
+/** The context-overflow alarm, as a card in the same shape as a tip — moved
+ * off the statusline (it used to replace the whole line at ctx>=80%) onto the
+ * Stop-hook nudge, so the statusline stays one constant layout. */
 export function contextAlarmLine(pct: number, contextTokens: number): string {
-  return `[${BRAND}]: context at ${pct}% — every reply re-reads ${fmtTok(contextTokens)} 🪙`;
+  return card(`[${BRAND}] ⚠️ Claude's memory is almost full`, [
+    ["What's happening", `This chat is using ${pct}% of Claude's memory (${fmtTok(contextTokens)} tokens).`],
+    [
+      CARD_LABELS[1],
+      "Every reply re-sends all of it, and near 100% Claude summarizes itself automatically, which can lose details.",
+    ],
+    [CARD_LABELS[2], "Type /compact at a good stopping point, or /clear if you're starting something new."],
+  ]);
 }
 
 export function rotatingHint(): string {
@@ -751,7 +843,7 @@ export function renderReport(opts: {
     `│ 🎮 session  ${s.session_id.slice(0, 8)} · ${shortModel(s.model)} · plan mode ${s.used_plan_mode ? "✓ used" : "✗ not used"}`,
     `│ ⚡ tokens   ${fmtTok(s.tokens_in)} in → ${fmtTok(s.tokens_out)} out${cost ? ` · ${cost}` : ""}`,
     ...(cacheHit != null
-      ? [`│ 💾 cache    ${cacheHit}% reused from cache (${fmtTok(s.cache_read)} tokens ≈ free)`]
+      ? [`│ 💾 cache    ${cacheHit}% of the chat re-read at the cheap cached price (${fmtTok(s.cache_read)} tokens)`]
       : []),
     // Denials are appended only when there were any — a permanent "0 denied"
     // on every report is noise, and the noise budget is law.
@@ -766,13 +858,13 @@ export function renderReport(opts: {
   const waste = opts.tips
     .map((t) => ({ t, worth: earnDollars(t.est_savings_tokens, t.est_class, s) }))
     .filter((w) => effectiveTokens(w.t.est_savings_tokens, (w.t.est_class as EstClass) ?? "input") > 0);
-  lines.push(sep("🔎 waste found this session"));
+  lines.push(sep("🔎 what cost you extra this session"));
   if (waste.length > 0) {
     for (const { t, worth } of waste) {
       const def = TIPS[t.tip_id];
       const eff = effectiveTokens(t.est_savings_tokens, (t.est_class as EstClass) ?? "input");
-      const amount = worth != null && worth >= 0.01 ? `≈$${worth.toFixed(2)}` : `~${fmtTok(eff)} 🪙`;
-      lines.push(`│ ${def?.emoji ?? "•"} ${def?.title ?? t.tip_id} — ${amount} recoverable`);
+      const amount = worth != null && worth >= 0.01 ? `≈$${worth.toFixed(2)}` : `~${fmtTok(eff)} tokens 🪙`;
+      lines.push(`│ ${def?.emoji ?? "•"} ${def?.title ?? t.tip_id} — could have saved ${amount}`);
     }
   } else if (opts.tips.length === 0) {
     lines.push("│ ✨ none — clean session!");
@@ -806,23 +898,21 @@ export function renderReport(opts: {
         ...fileVarFrom(evidence, opts.files),
       });
       lines.push(`│ ${def.emoji} ${def.title}`);
-      // Labeled rows: what happened → what it's worth → what to do. The
-      // adaptive analyzer's own sentence (with the user's numbers) replaces
-      // the generic "what happened" when present.
-      lines.push(
-        ...row("what happened", opts.active.why ? `🤖 ${opts.active.why}` : renderTemplate(def.what, vars)),
-      );
-      const worth = earnDollars(opts.active.est_savings_tokens, opts.active.est_class, s);
-      if (worth != null && worth >= 0.01) {
-        lines.push(...row("worth", `≈$${worth.toFixed(2)} back in your pocket`));
-      } else if (activeEff > 0) {
-        lines.push(...row("worth", `~${fmtTok(activeEff)} 🪙 back in your pocket`));
-      } else if (def.worth) {
-        lines.push(...row("worth", def.worth));
-      }
-      lines.push(...row("next time", renderTemplate(def.fix, vars)));
+      // The same three parts as every other surface. The adaptive analyzer's
+      // own sentence (with the user's numbers) replaces "What happened" when
+      // present, and a row the evidence can't fill falls back to the title
+      // rather than printing a {placeholder}.
+      const problem = renderTemplate(def.problem, vars);
+      const happened = opts.active.why
+        ? `🤖 ${opts.active.why}`
+        : sentence(UNRESOLVED_PLACEHOLDER.test(problem) ? def.title : problem);
+      lines.push(...row("What happened", happened));
+      const earn = earnOf(opts.active, def, s);
+      lines.push(...row("Why it matters", `${sentence(renderTemplate(def.impact, vars))}${earn ? ` ${earn.sentence}` : ""}`));
+      lines.push(...row("How to fix", sentence(renderTemplate(def.action, vars))));
+      if (def.detail) lines.push(...row("Tip", sentence(renderTemplate(def.detail, vars))));
       if (def.cite?.quote) {
-        lines.push(...row("the experts", `📖 "${def.cite.quote}" — ${def.cite.author ?? def.cite.source}`));
+        lines.push(...row("The experts", `📖 "${def.cite.quote}" — ${def.cite.author ?? def.cite.source}`));
       }
       lines.push(`│`, `│   read more ↗ ${def.cite?.url ?? def.docs}`, `│   not helpful? snooze 30 days: /remy-dismiss`);
     } else {
@@ -868,7 +958,7 @@ export function renderWeek(opts: {
   lines.push(
     sep("Σ totals"),
     `│ ${fmtTok(t.tokensIn + t.tokensOut)} 🪙${cost ? ` · ${cost}` : ""} · ${t.sessions} sessions · ${t.planSessions} plan-mode`,
-    `│ waste caught: ${opts.wasteTips} tips · ~${fmtTok(opts.wasteTokens)} 🪙 recoverable`,
+    `│ habits that cost extra: ${opts.wasteTips} · could have saved ~${fmtTok(opts.wasteTokens)} tokens 🪙`,
     foot(),
   );
   return lines.join("\n");

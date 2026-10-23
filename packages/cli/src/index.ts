@@ -85,7 +85,7 @@ import {
   spendField,
   splash,
   tipLine,
-  tipLineLong,
+  tipCard,
   weekTotals,
 } from "./ui";
 import {
@@ -351,13 +351,13 @@ async function ingest(): Promise<void> {
           const contextTip = tip?.tip_id === "context-band" || tip?.tip_id === "auto-compact";
           if (tip && !(inAlarmZone && contextTip) && dueForStopNudge(db, tip.tip_id, now)) {
             markStopNudgeShown(db, tip.tip_id, now);
-            // tipLineLong, not tipLine: this is a full-width transient
-            // systemMessage, so there is no reason to squeeze it into the
-            // 55-char form the boxed splash needs.
+            // The three-line card, not a one-liner: this is a full-width
+            // transient systemMessage, and labeled "What happened / Why it
+            // matters / How to fix" rows are what a beginner can actually read.
             const ctx = tipContext(db, sessionId, [tip], payload.cwd);
             console.log(
               JSON.stringify({
-                systemMessage: tipLineLong(tip, ctx.session, fileVar(tip.evidence, ctx.files)),
+                systemMessage: tipCard(tip, ctx.session, fileVar(tip.evidence, ctx.files)),
               }),
             );
           }
@@ -1023,7 +1023,7 @@ function dismiss(args: string[]): void {
   console.log(`🐭 snoozed ${def ? `${def.emoji} ${def.title}` : dismissedId} for 30 days.`);
   const open = openTips(db);
   const ctx = cliTipContext(db, next ? [...open, next] : open);
-  if (next) console.log(`💡 up next: ${tipLineLong(next, ctx.session, fileVar(next.evidence, ctx.files))}`);
+  if (next) console.log(`💡 up next:\n${tipCard(next, ctx.session, fileVar(next.evidence, ctx.files))}`);
   // A snoozed tip must leave the spinner too, or dismissing it changes nothing
   // where the user actually reads it.
   syncSpinnerTips(db, open, ctx);

@@ -1,36 +1,33 @@
 // Curated tip catalog — written once, reused by every host adapter.
 //
-// EVERY rule-backed tip is three parts, in this order, and the shape is
-// enforced by catalog.test.ts rather than left to whoever writes the next one:
+// EVERY tip is three parts, in this order, written for someone in their first
+// week of Claude Code. catalog.test.ts enforces the shape and the vocabulary:
 //
-//   problem → action → earn
-//   │         │        └─ NEVER authored here. tipLineLong() derives it from
-//   │         │           the finding's estimate and the session's own measured
-//   │         │           cost, or falls back to `worth`.
-//   │         └─ what to do next: a command, a key chord, an imperative.
-//   └─ what went wrong, in evidence the developer RECOGNIZES — a filename
-//      where one can be resolved, otherwise a tool name, a denominator, a
-//      peak, a duration.
+//   What happened → Why it matters → How to fix   (+ the cost, never authored)
+//   problem         impact           action
 //
-// This replaced a single free-form `live` string, which is how the deck ended
-// up reading "you edited one file 14×" (the rule knew the file and dropped it),
-// "1 files … one of them 4×" (a count and a plural noun in one sentence),
-// "1333 min" (22 hours), and "+219M 🪙" (raw cache-read tokens billed as if
-// they were fresh input). Nothing checked any of it, so all four shipped.
+//   - `problem`: what went wrong, in evidence the developer RECOGNIZES — a
+//     filename where one resolves, otherwise a tool name, a count with its
+//     denominator, a peak, a duration. Rule tips carry ≥1 {placeholder} and
+//     render ≥1 digit. Wisdom tips have no session numbers and say it plainly.
+//   - `impact`: why it costs something, as one clause with no numbers. The
+//     renderer appends the measured cost after it ("This cost about $0.40."),
+//     derived from the finding's estimate and the session's own cost — or
+//     `worth`, when what the fix buys is not tokens.
+//   - `action`: one concrete step. Commands stay literal (/clear, /compact,
+//     Shift+Tab) and say what they do.
 //
-// Rules for writing them:
-//   - `problem` is second person, carries at least one {placeholder}, and
-//     renders at least one digit. Never a bare count with no denominator.
-//   - `action` names the thing to do, not the thing to feel.
-//   - Neither half may contain a 🪙, a $, or the brand tag — the renderer owns
-//     the value clause and the tag.
-//   - Composed, the line stays ≤140 chars so it fits a Stop nudge and the
-//     spinner without wrapping.
-//   - Anything that could meet a 1 ("{n} files") is pre-composed in the rule
-//     as a clause, not assembled from a number and a noun here.
+// Plain words only. A user who does not know what a context window, a cache
+// prefix or a tool schema is must still understand the line: say "Claude's
+// memory for this chat", "the cache", "the add-on's instructions". The
+// jargon list in catalog.test.ts fails the build on the old terms.
 //
-// `short` is the narrow form for the boxed session-start splash, still
-// ≤55 chars; `what`/`fix`/`cite` are the long forms for the /remy report.
+// No field may contain a 🪙, a $, an arrow or the brand tag: the renderer owns
+// the cost, the separators and the tag. Anything that could meet a 1 ("{n}
+// files") is pre-composed in the rule as a clause, not assembled here.
+//
+// `short` is the narrow form for the boxed session-start splash (≤55 chars);
+// `detail` is an optional extra line for the /remy report.
 
 /** Product name shown with every tip. */
 export const BRAND = "🐭 REMY";
@@ -49,24 +46,27 @@ export interface TipDef {
   /** Official docs page that explains the fix — the tip's click-through target. */
   docs: string;
   emoji: string;
+  /** Plain name of the problem. No placeholders: it is the render-time
+   * fallback when a row's evidence can't fill the templates. */
   title: string;
+  /** Splash form, "problem → fix", ≤55 chars. */
   short: string;
-  /** One sentence: what the coach saw, numbers included. Plain words. */
-  what: string;
-  /** [1 of 3] What went wrong, in evidence the developer recognizes. Second
-   * person, ≥1 {placeholder}, renders ≥1 digit. Wisdom tips have no session
-   * evidence to cite, so they omit it and fall back to `short`. */
-  problem?: string;
-  /** [2 of 3] What to do about it: a command, a key chord, an imperative. */
-  action?: string;
-  /** [3 of 3], and only when there is no honest number. Most tips leave this
-   * unset and let the renderer derive money from the finding's estimate;
+  /** [1 of 3] What happened — evidence the developer recognizes. Rule tips:
+   * ≥1 {placeholder}, renders ≥1 digit. */
+  problem: string;
+  /** [2 of 3] Why it matters — the mechanism in one clause, no numbers. The
+   * renderer appends the measured cost after it. */
+  impact: string;
+  /** [3 of 3] How to fix — one concrete step, commands explained. */
+  action: string;
+  /** Optional extra advice, shown only in the /remy report. */
+  detail?: string;
+  /** What the fix is worth when there is no honest number. Most tips leave
+   * this unset and let the renderer derive money from the finding's estimate;
    * `no-verify` and `subagent-offload` set it because what they buy is not
    * tokens, and inventing a token figure to fill the slot is exactly the
    * habit that made the old numbers untrustworthy. */
   worth?: string;
-  /** One or two imperative sentences: exactly what to do next time. */
-  fix: string;
   /** Default values for placeholders a tip row might not carry.
    *
    * Two render paths need this and neither is hypothetical. The adaptive
@@ -77,9 +77,9 @@ export interface TipDef {
    * those render it as a literal `{skill_k}` in the report, on real databases,
    * until the rule happens to re-fire.
    *
-   * `short`/`live` survive that on their own (tipBody falls back to the
-   * title), but `what`/`fix` render with no such guard. Merged UNDER the
-   * row's real evidence, so a measured value always wins. */
+   * The one-line forms survive that on their own (tipBody falls back to the
+   * title), but the report renders `problem`/`detail` with no such guard.
+   * Merged UNDER the row's real evidence, so a measured value always wins. */
   fallbacks?: Record<string, string>;
   /** Expert citation backing the tip — the receipts behind the advice. */
   cite?: TipCite;
@@ -88,21 +88,19 @@ export interface TipDef {
 }
 
 export const TIPS: Record<string, TipDef> = {
+  // No memory size in the copy: 200k and 1M are both common and old rows never recorded it.
+  // The peak needs no excuse, because the automatic summary only fires when memory is full.
   "auto-compact": {
     id: "auto-compact",
     docs: "https://code.claude.com/docs/en/context-window",
     emoji: "🧹",
-    title: "Auto-compact hit mid-task",
-    short: "Auto-compact fired mid-task → /compact at breakpoints",
-    problem: "auto-compact fired {count}× mid-task, with the window {peak_pct}% full",
-    // No window size in the copy: it would need a fallback for rows written
-    // before it was recorded, and there is no honest one — 200k and 1M are
-    // both common. The peak needs no such excuse, because auto-compact only
-    // fires when the window is full.
-    action: "run /compact at your next milestone instead",
+    title: "Claude ran out of room mid-task",
+    short: "Memory filled up mid-task → /compact between steps",
+    problem: "Claude's memory filled up ({peak_pct}% full) and it summarized itself {count}× in the middle of your task",
+    impact: "an automatic summary can drop details Claude still needed",
+    action: "type /compact yourself between steps, at a moment you choose",
+    detail: "Smaller tasks avoid it altogether: one goal per chat, then /clear.",
     fallbacks: { peak_pct: "100" },
-    what: "Auto-compact fired {count}× mid-task — Claude summarized at the worst moment, with the window already full.",
-    fix: "Run /compact yourself at a natural breakpoint (after a milestone, before a new task). Scoping tasks smaller avoids the overflow entirely.",
     cite: {
       source: "Chroma Research",
       url: "https://research.trychroma.com/context-rot",
@@ -113,14 +111,12 @@ export const TIPS: Record<string, TipDef> = {
     id: "plan-mode",
     docs: "https://code.claude.com/docs/en/permission-modes",
     emoji: "🧠",
-    title: "Big task, no plan",
-    short: "Long build, no plan mode → plan first (Shift+Tab ×2)",
-    problem:
-      "{edits} edits across {tool_calls} tool calls ({top_tool_n} of them {top_tool}) with no plan",
-    action: "Shift+Tab ×2 before the next big one",
-    fallbacks: { top_tool_n: "most", top_tool: "tool calls" },
-    what: "{edits}+ edits across {tool_calls} tool calls — and plan mode was never used.",
-    fix: "Before a big task, press Shift+Tab twice: Claude explores first, you approve the plan, then it builds. Fewer wrong turns.",
+    title: "Big job without a plan",
+    short: "Big job, no plan → Shift+Tab twice to plan first",
+    problem: "Claude made {edits} edits across {tool_calls} steps without a plan first",
+    impact: "with no plan to check, wrong turns get built and then redone",
+    action: "press Shift+Tab twice before a big job, so you approve a plan first",
+    detail: "In plan mode Claude looks around first and shows you its plan. Nothing is changed until you say yes.",
     cite: {
       source: "The Pragmatic Engineer",
       author: "Boris Cherny, creator of Claude Code",
@@ -132,75 +128,64 @@ export const TIPS: Record<string, TipDef> = {
     id: "retry-loop",
     docs: "https://code.claude.com/docs/en/best-practices",
     emoji: "🔁",
-    title: "Retry loop detected",
-    short: "{tool} failed {run}× in a row → stop, add missing context",
-    problem: "{tool} failed {run}× in a row on {file}",
-    action: "stop after two: Esc, then paste the error it kept hitting",
+    title: "The same step kept failing",
+    short: "{tool} failed {run}× in a row → Esc, share the error",
+    problem: "{tool} failed {run} times in a row on {file}",
+    impact: "each retry costs the same and fails for the same reason",
+    action: "press Esc after two failures and paste the error it keeps hitting",
+    detail: "What it is missing is usually one fact: the error text, the file's real state, or a rule it does not know.",
     fallbacks: { file: "the same target" },
-    what: "The same {tool} call failed {run}× in a row — a retry loop.",
-    fix: "After two identical failures, stop the loop: press Esc, paste the missing context (error output, file state, constraint), or change approach.",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
       quote: "Correcting it quickly generally produces better solutions faster.",
     },
   },
+  // Deliberately NOT "save what Claude keeps re-deriving": /doctor cuts exactly that from CLAUDE.md,
+  // so a user who followed us and then ran /doctor would watch it delete what we told them to add.
   "reread-churn": {
     id: "reread-churn",
     docs: "https://code.claude.com/docs/en/memory",
     emoji: "📚",
-    title: "Re-reading the same files",
-    short: "Same file read {worst}× → pin the facts in CLAUDE.md",
-    problem: "{file} got read {worst}× this session — {more}",
-    action: "pin what it keeps re-deriving in CLAUDE.md",
-    fallbacks: { file: "one file", more: "nothing new any of those times" },
-    what: "{files} file(s) were read again and again (worst one: {worst}×).",
-    // Deliberately NOT "facts Claude keeps re-deriving belong in CLAUDE.md",
-    // which is what this said until the host shipped `/doctor`: its trim cuts
-    // "content Claude could derive from the codebase" — the same word, the
-    // opposite instruction. A user who followed us and then ran /doctor would
-    // watch it delete what we told them to add. This names what the trim
-    // explicitly KEEPS instead: pitfalls, rationale, conventions.
-    fix: "Pin what Claude gets WRONG, not what it can re-derive: the convention it keeps missing, the pitfall, the constraint. Facts about one corner of the codebase belong in a nested CLAUDE.md next to it, where they load on demand.",
+    title: "Claude keeps re-reading a file",
+    short: "Same file read {worst}× → save the facts in CLAUDE.md",
+    problem: "Claude read {file} {worst} times this session, {more}",
+    impact: "every re-read pays again for something it already saw",
+    action: "save the facts it keeps looking up in CLAUDE.md, the notes file it reads at the start",
+    detail: "Write down what Claude gets wrong, not what it can look up: the rule it keeps missing, the trap, the limit. Notes about one folder can go in a CLAUDE.md inside that folder, which loads only when needed.",
+    fallbacks: { file: "one file", more: "with nothing new to find most of those times" },
   },
   "edit-thrash": {
     id: "edit-thrash",
     docs: "https://code.claude.com/docs/en/best-practices",
     emoji: "🔨",
-    title: "Edit ping-pong on one file",
-    short: "Same file edited {edits}×, 2+ misses → /clear + re-brief",
-    problem: "{file} took {edits} edits with {rereads} re-reads between them",
-    // "rather than attempt {next}" works both ways — "rather than attempt 15"
-    // when the count is known, "rather than attempt another" on a row written
-    // before it was recorded. "before attempt {next}" did not: it degraded to
-    // "before attempt the next one".
-    action: "/clear and re-brief rather than attempt {next}",
-    fallbacks: { file: "one file", rereads: "several", next: "another" },
-    what: "One file took {edits} edit attempts, with re-reads between tries — every retry paid for all the failed ones before it.",
-    fix: "After 2 failed fixes on the same spot: /clear, then re-brief with what you learned (the missing constraint, the error that kept coming back).",
+    title: "Stuck fixing the same file",
+    short: "Stuck editing one file {edits}× → /clear, explain again",
+    problem: "Claude edited {file} {edits} times, re-reading it {rereads} times in between",
+    impact: "every new try re-sends all the failed tries before it",
+    action: "type /clear, then explain the problem again in a sentence or two",
+    detail: "Include what you learned: the rule it kept missing, or the error that kept coming back. A fresh chat with a clear ask beats a long one full of failed tries.",
+    fallbacks: { file: "one file", rereads: "several" },
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
       quote: "A clean session with a better prompt almost always outperforms a long session with accumulated corrections.",
     },
   },
+  // The one thing this tip is NOT worth is tokens. Skipping a check does not spend tokens, it ships bugs,
+  // and saying so is more persuasive than an invented figure.
   "no-verify": {
     id: "no-verify",
     docs: "https://code.claude.com/docs/en/best-practices",
     emoji: "🧪",
-    title: "Edits shipped unverified",
-    short: "{edits} edits shipped, 0 verify runs → end with tests/build",
-    // "{shell}, {bash_mix}" said the same thing twice ("20 shell runs, 15
-    // other, 5 file reads"). The parenthetical carries the detail.
-    problem: "{edits} edits across {scope}; of {shell} ({bash_mix}), not one was a test or build",
-    action: "end with a check it can run",
-    // The one thing this tip is NOT worth is tokens. It used to claim a flat
-    // 10,000 of savings; skipping a verify pass does not spend tokens, it
-    // ships bugs, and saying so is more persuasive than a fabricated figure.
-    worth: "fewer bugs, not fewer tokens",
-    fallbacks: { scope: "several files", shell: "some shell runs", bash_mix: "none of them a check" },
-    what: "{edits} edits shipped — and not one test, build, or lint run to check them.",
-    fix: "End with a verify pass: give Claude a check it can run (tests, build, typecheck) and ask it to iterate until green.",
+    title: "Changes were never tested",
+    short: "{edits} edits, never tested → ask it to run the tests",
+    problem: "Claude made {edits} edits across {scope} and never ran a test or a build",
+    impact: "bugs stay hidden until you find them yourself",
+    action: "finish by asking Claude to run the tests and fix until they pass",
+    detail: "Any check Claude can run works: tests, a build, a type check, a linter.",
+    worth: "fewer bugs, not saved tokens",
+    fallbacks: { scope: "several files" },
     cite: {
       source: "WorkOS",
       author: "Boris Cherny, creator of Claude Code",
@@ -208,53 +193,34 @@ export const TIPS: Record<string, TipDef> = {
       quote: "Self-verification is worth 2–3x on the quality of the final result.",
     },
   },
+  // The action must keep naming CLAUDE.md and the add-on surface: claude-md-prune yields to this tip
+  // (rules.ts) because this line already gets CLAUDE.md dealt with. {skill_k} is a number we measured,
+  // so it stays even though /doctor now does the audit.
   "context-tax": {
     id: "context-tax",
     docs: "https://code.claude.com/docs/en/costs",
     emoji: "🎒",
-    title: "Heavy pack before turn one",
-    short: "{pct}% context used before turn 1 → audit MCP + CLAUDE.md",
-    // "{biggest}" is the mod's attribution ("MCP tool schemas (62k)"); without
-    // the mod the fallback restores the generic list this always said.
-    problem: "{pct}% of the window was gone before turn one — {first_ctx}, mostly {biggest}, every session",
-    action: "run /doctor to find what you are not using",
-    what: "{pct}% of the window was full before any work happened ({first_tokens} tokens, mostly {biggest}) — a tax you pay again every session.",
-    // The attribution is appended, never substituted: `claude-md-prune` yields
-    // to this tip precisely because this sentence already says "prune
-    // CLAUDE.md" (rules.ts), and dropping either imperative would leave a user
-    // with a 40KB CLAUDE.md told the number and never told to cut it.
-    // It also goes in `fix` rather than `what` because the adaptive prompt
-    // slices this tip's catalog line at 220 chars (adapt.ts) — it already cuts
-    // mid-way through `fix`, so anything added to `what` would push more of
-    // the fix out of the model's view.
-    // /doctor now audits unused skills, MCP servers and plugins against their
-    // context cost, and trims CLAUDE.md — so it replaces the manual audit this
-    // used to spell out. What it does NOT replace is {skill_k}: the host's
-    // check carries no session number and no history. Never let a host command
-    // stand in for a number we measured; only for an instruction we could not
-    // verify. `claude-md-prune` still yields to this tip (rules.ts) because
-    // this sentence still gets CLAUDE.md dealt with — now via /doctor.
-    fix: "Run /doctor: it finds unused skills, MCP servers and plugins against their context cost, trims CLAUDE.md, and asks before changing anything. Skill descriptions alone are {skill_k} of your pack — /context shows the rest.",
-    // "skill descriptions", not "plugin skills": the measurement sums plugin,
-    // personal (~/.claude) and project skills, so naming plugins as the cause
-    // would assert something the probe never established.
-    fallbacks: { skill_k: "the other part", first_ctx: "most of it", biggest: "skills, MCP and CLAUDE.md" },
+    title: "The chat starts already crowded",
+    short: "{pct}% full before you start → /doctor to trim",
+    problem: "{pct}% of Claude's memory was used before your first message, mostly by {biggest}",
+    impact: "you pay for that space on every message, in every session",
+    action: "run /doctor to find skills, MCP add-ons and CLAUDE.md notes you don't use",
+    detail: "/doctor asks before it changes anything. Skill descriptions alone take {skill_k} of it, and /context shows the rest.",
+    fallbacks: { skill_k: "part", biggest: "skills, MCP add-ons and CLAUDE.md" },
   },
+  // `server` resolves at render time from the stored hash (resolve.ts), the way `file` does;
+  // unresolved, it reads "the one MCP add-on".
   "mcp-idle": {
     id: "mcp-idle",
     docs: "https://code.claude.com/docs/en/mcp",
     emoji: "🔌",
-    title: "An MCP server you never called",
-    short: "{server} costs {tokens_k}k a turn, unused → /mcp disable",
-    problem: "{server} parks {tokens_k}k of tool schemas in every turn, and this session never called it once",
-    action: "disable it in /mcp until you need it",
-    // `server` resolves at render time from the stored hash (resolve.ts), the
-    // way `file` does; unresolved, the generic wording stands.
-    // Pre-composed clauses (rules.ts): a session can have one turn, a server
-    // one tool, and "1 turns" is the defect the plural test exists for.
-    fallbacks: { server: "one MCP server", tools_clause: "its tool schemas", turns_clause: "your turns" },
-    what: "{server} loaded {tools_clause} (~{tokens_k}k tokens) into every one of {turns_clause}, and not one call went to it.",
-    fix: "Disable it in /mcp (per project is fine) and re-enable it the day you need it. Connect servers to the projects that use them, not to every session — /context shows what each one costs.",
+    title: "An add-on you never used",
+    short: "{server} add-on unused → turn it off in /mcp",
+    problem: "the {server} MCP add-on takes ~{tokens_k}k tokens of Claude's memory every message, and this session never used it",
+    impact: "you pay for its instructions on every message anyway",
+    action: "turn it off in /mcp, and back on the day you need it",
+    detail: "You can turn add-ons on just for the projects that use them. /context shows what each one costs.",
+    fallbacks: { server: "one" },
     cite: {
       source: "simonwillison.net",
       author: "Simon Willison",
@@ -266,13 +232,13 @@ export const TIPS: Record<string, TipDef> = {
     id: "read-in-slices",
     docs: "https://code.claude.com/docs/en/costs",
     emoji: "📖",
-    title: "Whole files where a slice would do",
-    short: "{count} whole files read → ask for the slice you need",
-    problem: "{count} reads pulled whole files in — the biggest, {file}, was ~{worst_k}k",
-    action: "ask for a line range or a symbol name, and grep first",
+    title: "Whole files read when a part would do",
+    short: "{count} whole files read → ask for just the part",
+    problem: "Claude read {count} whole files; the biggest, {file}, was ~{worst_k}k tokens",
+    impact: "the whole file stays in Claude's memory and is paid for on every later message",
+    action: "ask for the function or lines you need, or have it search first",
+    detail: "A search returns the matching lines, not the whole file.",
     fallbacks: { file: "one of them" },
-    what: "{count} Read results landed whole files in the window, the largest ~{worst_k}k tokens — the window carries them for every turn after.",
-    fix: "Ask for the part you need: a symbol name, or Read with offset/limit. Grep first when you're hunting — it returns matches, not files.",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
@@ -283,34 +249,32 @@ export const TIPS: Record<string, TipDef> = {
     id: "noisy-tool",
     docs: "https://code.claude.com/docs/en/costs",
     emoji: "🔊",
-    title: "One tool keeps flooding the window",
-    short: "{tool} ~{avg_k}k a call → ask it for less",
-    problem: "{tool} returned ~{avg_k}k tokens per call, {calls} times — {total_k}k parked in the window",
-    action: "ask for less: a filter, a range, a page",
-    fallbacks: { tool: "one tool", total_k: "a lot", worst_k: "many" },
-    what: "{tool} returned ~{avg_k}k tokens on each of {calls} calls (worst ~{worst_k}k) — {total_k}k tokens the window then carried for every turn after.",
-    fix: "Ask that tool for less: a filter, a line range, a page size, a text snapshot instead of a screenshot. If it can't be narrowed, run it inside a subagent so only the summary lands in your window.",
+    title: "One tool returns far too much",
+    short: "{tool}: ~{avg_k}k a call → ask it for less",
+    problem: "{tool} returned ~{avg_k}k tokens a call over {calls} calls, {total_k}k in all",
+    impact: "all of it stays in Claude's memory and is paid for on every later message",
+    action: "ask it for less: a filter, one page, or text instead of a screenshot",
+    detail: "If it can't return less, have a helper agent (a subagent) run it, so only a short summary comes back to your chat.",
+    fallbacks: { tool: "one tool", total_k: "a lot" },
     cite: {
       source: "Anthropic Engineering",
       url: "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
       quote: "Each subagent might explore extensively, using tens of thousands of tokens or more, but returns only a condensed, distilled summary.",
     },
   },
+  // Delegating COSTS more tokens than reading inline (the rule measures it). What it buys is room,
+  // so that is what the slot says instead of a savings figure it would have to invent.
   "subagent-offload": {
     id: "subagent-offload",
     docs: "https://code.claude.com/docs/en/sub-agents",
     emoji: "🔀",
-    title: "Exploration bloated main context",
-    short: "{reads} files read inline → offload search to a subagent",
-    problem: "{reads} files read into main context, peaking at {ctx_pct}% — no subagent used",
-    action: 'next hunt, say "use a subagent to investigate …"',
-    // Delegating COSTS more tokens than doing the work inline (the rule's own
-    // comment measures it). What it buys is room in the main window, so that
-    // is what the slot says rather than a savings figure it would have to
-    // invent to compete.
-    worth: "room in your window, not fewer tokens",
-    what: "{reads} files were read into the main context (peak {ctx_pct}%) — exploration bloated the window.",
-    fix: 'Next codebase hunt, say: "use a subagent to investigate …" — it reads in its own window and reports back just the summary.',
+    title: "Searching filled up the chat",
+    short: "{reads} files read while searching → use a subagent",
+    problem: "Claude read {reads} files into this chat while searching, filling its memory to {ctx_pct}%",
+    impact: "the chat gets crowded, and Claude's answers get worse",
+    action: "next time, say \"use a subagent to look into this\"",
+    detail: "A subagent is a helper that searches in its own space and sends back only a short summary.",
+    worth: "room for the real work, not saved tokens",
     cite: {
       source: "Anthropic Engineering",
       url: "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
@@ -321,43 +285,39 @@ export const TIPS: Record<string, TipDef> = {
     id: "tools-over-bash",
     docs: "https://code.claude.com/docs/en/best-practices",
     emoji: "🐚",
-    title: "Shell reads where tools exist",
-    short: "{count}× cat/grep in Bash → let it use Read + Grep",
-    problem: "{count} of {bash_total} Bash calls were file reads, against {tool_reads} real Read/Grep calls",
-    action: "ask for Read/Grep/Glob by name, and pin it in CLAUDE.md",
-    fallbacks: { bash_total: "your", tool_reads: "few" },
-    what: "{count} reads and searches went through the shell (cat, grep, find) — that output lands in the context whole: no pagination, no truncation, no cap.",
-    fix: 'Ask for the built-in tools by name: "use Read/Grep/Glob instead of shell commands". Pin it in CLAUDE.md once and every session starts that way.',
+    title: "Reading files the hard way",
+    short: "{count} file reads via the shell → ask for Read",
+    problem: "{count} of {bash_total} shell commands were just reading or searching files",
+    impact: "shell output comes back whole, with no size limit",
+    action: "tell Claude \"use Read and Grep, not shell commands\", and add that line to CLAUDE.md",
+    detail: "Read and Grep return a page at a time, so a big file can't flood the chat.",
+    fallbacks: { bash_total: "your" },
   },
   "model-fit": {
     id: "model-fit",
     docs: "https://code.claude.com/docs/en/model-config",
     emoji: "🎛",
-    title: "Big model, small jobs",
-    short: "{n} light sessions on {tier} → try Sonnet for quick tasks",
-    problem: "{n} of {total} sessions this week ran {model} for a handful of tool calls",
-    action: "/model sonnet for the quick ones",
-    // `tier` was the literal string "opus" — a word nobody types. Rows written
-    // before the real id was kept fall back to it rather than to nothing.
-    fallbacks: { model: "the top-tier model", total: "your" },
-    what: "{n} sessions this week ran the {tier}-tier model for light work — a few tool calls, small output.",
-    fix: "/model sonnet for quick tasks stretches the same budget further; switch back up when the task actually needs the big model.",
+    title: "The biggest model for small jobs",
+    short: "{n} quick sessions on {tier} → /model sonnet",
+    problem: "{n} of {total} sessions this week used {model} for a few quick steps",
+    impact: "the top model costs several times more for work a smaller one does as well",
+    action: "type /model sonnet for quick jobs, and switch back for hard ones",
+    fallbacks: { model: "the top model", total: "your" },
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
       quote: "Reserve Opus for complex architectural decisions or multi-step reasoning.",
     },
   },
-  // ---- Wisdom tips: no deterministic rule fires these. Only the adaptive
-  // analyzer selects them, matching them to the user's metadata profile.
   "clear-between-tasks": {
     id: "clear-between-tasks",
     docs: "https://code.claude.com/docs/en/costs",
     emoji: "🚿",
-    title: "One session, many tasks",
-    short: "New task, old context → /clear between unrelated tasks",
-    what: "A session that hops between unrelated tasks pays for ALL of them on every single message.",
-    fix: "/clear when you switch topics — it costs nothing, and the stale context stops taxing you.",
+    title: "One chat, many tasks",
+    short: "New task, old chat → /clear between tasks",
+    problem: "you started a new task in the same chat",
+    impact: "every message still pays for the old task's history",
+    action: "type /clear when you switch to something unrelated; it's free",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
@@ -365,20 +325,18 @@ export const TIPS: Record<string, TipDef> = {
     },
     adaptiveOnly: true,
   },
+  // "80+" is not a guess dressed as a measurement: the rule only counts replies at or above 80%.
   "context-band": {
     id: "context-band",
     docs: "https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md",
     emoji: "🎯",
-    title: "Rode the red zone",
-    short: "{turns} turns above 80% context → /compact at 60%",
-    problem: "{turns} of {total_turns} replies ran ≥80% full, peaking at {peak_pct}%",
-    action: "/compact at your next milestone, near 60%",
-    // "80+" is not a guess dressed as a measurement: the rule only counts turns
-    // at or above 80%, so a row that predates the peak being recorded still
-    // truthfully peaked at 80-something.
+    title: "Kept working with memory almost full",
+    short: "Memory over 80% full → /compact around 60%",
+    problem: "{turns} of {total_turns} replies ran with Claude's memory over 80% full (peak {peak_pct}%)",
+    impact: "a nearly full memory costs more per reply, and Claude gets less accurate",
+    action: "type /compact at a good stopping point, around 60% full",
+    detail: "/compact shrinks the chat into a summary. Doing it yourself, at a break, means you choose what gets kept.",
     fallbacks: { total_turns: "your", peak_pct: "80+" },
-    what: "{turns} replies ran with the context ≥80% full — each one dragged the whole window through the model again, right where accuracy sags (context rot).",
-    fix: "Work in the 40–60% band: /compact early and on purpose at a natural breakpoint, and distill progress into small notes instead of letting raw output pile up.",
     cite: {
       source: "HumanLayer, Advanced Context Engineering",
       author: "Dex Horthy",
@@ -390,10 +348,12 @@ export const TIPS: Record<string, TipDef> = {
     id: "compact-focus",
     docs: "https://code.claude.com/docs/en/context-window",
     emoji: "🧭",
-    title: "Compact with instructions",
-    short: "/compact with instructions → tell it what to keep",
-    what: "A bare compact summarizes with generic priorities — it doesn't know what matters to you.",
-    fix: 'Compact with instructions: "/compact focus on the API changes" controls what survives. No continuity needed at all? /clear is free.',
+    title: "Tell /compact what to keep",
+    short: "Plain /compact → say what to keep",
+    problem: "a plain /compact doesn't know what matters to you",
+    impact: "it may summarize away the part you still need",
+    action: "say what to keep, like \"/compact keep the API changes\"",
+    detail: "Don't need any of it? /clear is free.",
     cite: {
       source: "Anthropic Engineering",
       url: "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
@@ -405,13 +365,13 @@ export const TIPS: Record<string, TipDef> = {
     id: "claude-md-missing",
     docs: "https://code.claude.com/docs/en/memory",
     emoji: "📄",
-    title: "No CLAUDE.md to read from",
-    short: "Re-reading the same files → write a CLAUDE.md",
-    problem: "{file} got read {worst}× and this project has no CLAUDE.md",
-    action: "run /init, or write the handful of facts by hand",
+    title: "No notes file for this project",
+    short: "No CLAUDE.md, same files re-read → type /init",
+    problem: "Claude read {file} {worst} times, and this project has no CLAUDE.md notes file",
+    impact: "every session rediscovers the same facts and pays for them again",
+    action: "type /init to create one, or write down the few facts you keep repeating",
+    detail: "CLAUDE.md is read once at the start of every session, instead of the same files being re-read all day.",
     fallbacks: { file: "one file" },
-    what: "You re-read {files} file(s) over and over — up to {worst}× — and this project has no CLAUDE.md, so every session rediscovers the same things from scratch.",
-    fix: "Run /init, or write a short CLAUDE.md by hand: the handful of facts you keep re-explaining. It loads once per session instead of being re-read all day.",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
@@ -422,18 +382,13 @@ export const TIPS: Record<string, TipDef> = {
     id: "claude-md-prune",
     docs: "https://code.claude.com/docs/en/memory",
     emoji: "✂️",
-    title: "Prune CLAUDE.md ruthlessly",
-    short: "CLAUDE.md is {kb}KB → cut what can't cause a mistake",
-    problem: "CLAUDE.md is {kb}KB — about {md_tokens} on every session, before you type",
-    action: "run /doctor, then cut any line whose absence causes no mistake",
+    title: "The notes file is too long",
+    short: "CLAUDE.md is {kb}KB → cut lines that prevent nothing",
+    problem: "your CLAUDE.md is {kb}KB ({md_tokens}), loaded at the start of every session",
+    impact: "you pay for it every session, and long notes get followed less well",
+    action: "run /doctor, then delete any line that wouldn't cause a mistake if it were gone",
+    detail: "/doctor trims the project's CLAUDE.md and asks first. Your personal ~/.claude/CLAUDE.md is yours to trim by hand.",
     fallbacks: { md_tokens: "several thousand tokens" },
-    what: "CLAUDE.md is {kb}KB and loads on every single session — at that size it competes with your actual task for attention.",
-    // /doctor leads because it knows what Claude can derive from THIS codebase
-    // and we do not, and because adapt.ts slices this line at 220 chars — only
-    // the first clause reaches the model. The by-hand sentence stays for the
-    // case /doctor does not cover: its trim is scoped to a checked-in
-    // CLAUDE.md, while our byte count also sums ~/.claude/CLAUDE.md.
-    fix: "Run /doctor: it trims a checked-in CLAUDE.md by cutting what Claude could derive from the codebase, keeps the pitfalls and conventions, and asks before changing anything. For a user-level ~/.claude/CLAUDE.md it won't touch, ask each line: would deleting this cause a mistake?",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
@@ -445,9 +400,11 @@ export const TIPS: Record<string, TipDef> = {
     docs: "https://code.claude.com/docs/en/memory",
     emoji: "📌",
     title: "Turn corrections into rules",
-    short: "Same correction twice → write it once in CLAUDE.md",
-    what: "Corrections you type in a session evaporate when it ends — Claude makes the same mistake tomorrow.",
-    fix: "Corrected the same thing twice? Write it into CLAUDE.md once. Checked into git, the whole team stops paying for it.",
+    short: "Same correction twice → write it in CLAUDE.md",
+    problem: "you corrected Claude on the same thing twice",
+    impact: "corrections are forgotten when the chat ends, so the mistake comes back",
+    action: "write the rule once in CLAUDE.md",
+    detail: "Commit it to git and the whole team gets the fix.",
     cite: {
       source: "The Pragmatic Engineer",
       author: "Boris Cherny, creator of Claude Code",
@@ -460,10 +417,11 @@ export const TIPS: Record<string, TipDef> = {
     id: "cli-over-mcp",
     docs: "https://code.claude.com/docs/en/mcp",
     emoji: "⌨️",
-    title: "CLIs before MCP servers",
-    short: "Prefer CLIs (gh, aws, …) over MCP → zero context tax",
-    what: "Every connected MCP server parks its tool list in your context permanently — even when you never use it.",
-    fix: "Prefer CLIs Claude already knows (gh, aws, …). /context shows what's eating space; /mcp disables idle servers.",
+    title: "Command-line tools before add-ons",
+    short: "Prefer gh, aws… over MCP add-ons → no idle cost",
+    problem: "each connected MCP add-on loads its instructions into every message",
+    impact: "you pay for them even when you don't use them",
+    action: "prefer command-line tools Claude knows, like gh or aws, and turn idle add-ons off in /mcp",
     cite: {
       source: "simonwillison.net",
       author: "Simon Willison",
@@ -476,10 +434,12 @@ export const TIPS: Record<string, TipDef> = {
     id: "rule-of-five",
     docs: "https://steve-yegge.medium.com/six-new-tips-for-better-coding-with-agents-d4e9c86e42a9",
     emoji: "🖐",
-    title: "The Rule of Five",
-    short: "Ask for 4–5 self-review passes → quality converges",
-    what: "Claude's first pass is rarely its best — quality keeps improving with self-review.",
-    fix: 'Ask "review your own work and fix what you find" 4–5 times — quality reliably plateaus around pass five.',
+    title: "Ask for a few review passes",
+    short: "Ask it to review its own work → better results",
+    problem: "Claude's first answer is rarely its best",
+    impact: "stopping at the first draft leaves fixable mistakes in",
+    action: "ask \"review your work and fix what you find\" a few times",
+    detail: "Quality usually stops improving around the fifth pass.",
     cite: {
       source: "Six New Tips for Better Coding With Agents",
       author: "Steve Yegge",
@@ -492,10 +452,11 @@ export const TIPS: Record<string, TipDef> = {
     id: "spec-first",
     docs: "https://code.claude.com/docs/en/best-practices",
     emoji: "📝",
-    title: "Spec first, fresh session second",
-    short: "Big feature → interview, spec it, then run it fresh",
-    what: "Big features built straight from a chat prompt drift — edge cases surface too late.",
-    fix: "Have Claude interview you and write a spec first, then execute it in a FRESH session: focused context, zero exploration residue.",
+    title: "Write a short spec first",
+    short: "Big feature → spec it first, build it fresh",
+    problem: "big features started from a quick message tend to drift",
+    impact: "edge cases show up late, when they cost the most to fix",
+    action: "have Claude interview you and write a short spec, then build it in a fresh chat",
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/best-practices",
@@ -503,75 +464,55 @@ export const TIPS: Record<string, TipDef> = {
     },
     adaptiveOnly: true,
   },
+  // "{gap}", not "{mins} min": the worst real gap on this machine was 1333 minutes, which is 22 hours
+  // nobody converts in their head. Fallbacks are words, never a placeholder glued to a unit.
   "cache-idle": {
     id: "cache-idle",
     docs: "https://code.claude.com/docs/en/costs",
     emoji: "🫗",
-    title: "A fat session left open",
-    short: "Came back cold {count}× → wrap up before stepping away",
-    // "{gap}", not "{mins} min": the worst real gap on this machine was 1333,
-    // and "1333 min" is 22 hours nobody converts in their head.
-    problem: "left idle {gap} — the return re-wrote {ctx} at full price",
-    action: "land the milestone and close the session before you step away",
-    // Both fallbacks are words, not placeholders and not numbers glued to a
-    // unit suffix: renderTemplate is a single pass, so "{mins} minutes" would
-    // render literally, and "~{ctx_k}k" would read "~a full window'sk".
-    fallbacks: { gap: "a long stretch", ctx: "the whole context" },
-    what: "{count}× this session sat idle (longest {mins} min) until the cache expired — coming back re-wrote a 100k+ context at full price each time.",
-    fix: "Stepping away for a while? Land the milestone and wrap the session first — a fresh session with a one-line brief beats reheating a fat one. Quick break? Carry on, the cache holds.",
+    title: "Came back after the cache ran out",
+    short: "Back after a long break → start a new chat",
+    problem: "you left this chat idle for {gap}, so coming back re-sent {ctx} at full price",
+    impact: "a fresh chat is 10× cheaper to re-read, and a long break loses that discount",
+    action: "before a long break, finish the step, and start a new chat when you return",
+    detail: "A quick break is fine: the 🔥 timer on the status line shows how long the discount lasts.",
+    fallbacks: { gap: "a long time", ctx: "the whole chat" },
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/costs",
       quote: "A one-line question in a session that has been open all day still draws usage for the whole conversation.",
     },
   },
-  // The third cache tip, and the only one whose evidence is the host's rather
-  // than ours: Claude Code ≥ 2.1.260 diagnoses why a request missed its cached
-  // prefix (`prompt_cache.last_miss_cause` on the statusline payload) and the
-  // rule repeats that diagnosis in plain words. `cache-idle` is about leaving
-  // a session alone too long; this is about changing it mid-task — a plugin
-  // enabled, an MCP server connected, a model switched — which costs the same
-  // full re-write a cold return does, and is just as avoidable.
+  // The remedy depends on the cause, so the rule supplies it from a closed set in rules.ts, never from
+  // host text. The fallback covers adaptive rows and rows written before the host named a cause.
   "cache-miss": {
     id: "cache-miss",
     docs: "https://code.claude.com/docs/en/prompt-caching",
     emoji: "🧩",
-    title: "The cache kept getting invalidated",
-    short: "Cache invalidated {count}× → change settings between tasks",
-    problem: "{count} cache misses: {cause}, each re-writing {ctx}",
-    // The remedy depends on the cause, so the rule supplies it — from a closed
-    // set in rules.ts, never from host text. The fallback covers adaptive rows
-    // and rows written before the host named a cause.
+    title: "Mid-task changes reset the cache",
+    short: "Cache reset {count}× → change settings between tasks",
+    problem: "the cache reset {count} times because {cause}, re-sending {ctx} each time",
+    impact: "each reset pays full price for the whole chat again",
     action: "{remedy}",
-    fallbacks: {
-      cause: "the cached prefix changed",
-      ctx: "the whole context",
-      remedy: "pick model, effort and tools up front; /clear before changing them",
-    },
-    what: "{count}× this session a request no longer matched its cached prefix ({cause}), so the next turn re-wrote ~{ctx} at the cache-write price instead of reading it at a tenth.",
-    fix: "{remedy}. Claude Code names the likely cause of the last miss on /usage, under Prompt cache (main) — check it before the next big change.",
+    detail: "/usage names the likely cause of the last reset, under Prompt cache.",
+    fallbacks: { cause: "something in the chat's setup changed", ctx: "the whole chat", remedy: "pick the model, settings and add-ons at the start, and /clear before changing them" },
     cite: {
       source: "Claude Code docs",
       url: "https://code.claude.com/docs/en/prompt-caching",
       quote: "Pick your model and effort level at the top of a session, then save /compact for natural breaks between tasks. The fewer changes you make mid-task, the higher your cache hit rate.",
     },
   },
-  // The wisdom half of the cache story. `cache-idle` is the deterministic rule
-  // that fires AFTER a cold resume has already been paid for; this one explains
-  // the 🔥/🧊 statusline clock, which is the only surface that can speak while
-  // the cache is draining (nothing else fires while a developer sits idle).
-  // Deliberately states no TTL: it's 1h on Claude Code today and 5m on the raw
-  // API, the session measures its own, and copy that named a number would go
-  // stale the first time that changed. The 20× IS durable — it's the ratio of
-  // the two published multipliers, 2× to write against 0.1× to read.
+  // States no TTL: it is 1h on Claude Code today and 5m on the raw API. The 20× IS durable: the ratio
+  // of the two published multipliers, 2× to write against 0.1× to read.
   "cache-clock": {
     id: "cache-clock",
     docs: "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
     emoji: "🧊",
-    title: "A warm cache is most of your bill",
-    short: "A cold cache costs 20× → wrap up before you walk off",
-    what: "A warm cache re-reads your whole context at a tenth of the input price; once it expires the next turn re-writes it at double. Same conversation, ~20× the tokens.",
-    fix: "Watch the 🔥 on the statusline — while it's warm, carry on. Once it turns 🧊, resuming a fat session costs more than starting a fresh one: /clear and re-brief instead.",
+    title: "The cache timer is real money",
+    short: "🔥 timer running out → finish the step first",
+    problem: "the 🔥 cache timer on the status line is running down",
+    impact: "once it turns 🧊, your next message costs about 20× more",
+    action: "finish the step before it runs out, or start a new chat after",
     cite: {
       source: "Anthropic, Prompt caching",
       url: "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
@@ -583,10 +524,11 @@ export const TIPS: Record<string, TipDef> = {
     id: "plan-review",
     docs: "https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md",
     emoji: "🔍",
-    title: "Review the plan harder than the code",
-    short: "Review plans harder → bad lines become bad code",
-    what: "Errors compound: one bad plan line becomes hundreds of bad code lines across every file Claude touches.",
-    fix: "Read the plan like it's the code — your attention is worth most BEFORE the build starts, not at the diff.",
+    title: "Check the plan before the code",
+    short: "Read the plan closely → bad plans make bad code",
+    problem: "a mistake in the plan becomes many mistakes in the code",
+    impact: "fixing it after the build costs far more than fixing the plan",
+    action: "read the plan as carefully as you would read the code",
     cite: {
       source: "HumanLayer, Advanced Context Engineering",
       author: "Dex Horthy",
@@ -601,15 +543,15 @@ export const TIPS: Record<string, TipDef> = {
  * the session-start splash when no personal tip is active. Quotes carry their
  * attribution in the string — the receipts are part of the fun. */
 export const HINTS: string[] = [
-  "💡 Plan mode (Shift+Tab ×2) before big tasks — fewer wrong turns, fewer tokens.",
-  "🧠 Pin what Claude gets wrong, not what it can re-derive — /doctor trims the rest.",
-  "🧹 /compact at a natural breakpoint beats auto-compact mid-flight.",
-  "🔀 Subagents keep your main context clean during big searches.",
-  "⎋ Esc interrupts — steer early instead of paying for the wrong path.",
-  "🔓 Approving the same command all day? /fewer-permission-prompts writes the allowlist.",
-  "🗂 --resume keeps your context, not your cache — a big session re-reads at full price.",
-  "🔥 The cache clock is real money — 🧊 means the next turn re-writes it all at 2×.",
-  "🔖 Checkpoints are a session buffer, not a backup — commit before a risky agent run.",
+  "💡 Big job ahead? Shift+Tab twice gets you a plan to approve before Claude builds.",
+  "🧠 Claude keeps getting something wrong? Write it in CLAUDE.md once.",
+  "🧹 Chat filling up? /compact at a break beats an automatic summary mid-task.",
+  "🔀 Big search? Ask for a subagent: it searches, and only a summary comes back.",
+  "⎋ Going the wrong way? Press Esc to stop it early, before you pay for it.",
+  "🔓 Approving the same command all day? /fewer-permission-prompts fixes that.",
+  "🗂 Resuming a big chat later costs full price. A fresh chat is often cheaper.",
+  "🔥 The cache timer is money: once it turns 🧊, your next message costs ~20× more.",
+  "🔖 Undo history isn't a backup. Commit before letting Claude try something risky.",
   '💬 "Once there is a good plan, it will one-shot the implementation." — Boris Cherny',
   '💬 Self-verification is "worth 2–3x on the quality of the final result." — Boris Cherny',
   '💬 "A bad line of a plan could lead to hundreds of bad lines of code." — Dex Horthy',
@@ -617,7 +559,7 @@ export const HINTS: string[] = [
   '💬 "Own your context window." — 12-Factor Agents',
   '💬 "If you could describe the diff in one sentence, skip the plan." — Claude Code docs',
   '💬 "Coding agents are really good at running shell commands!" — Simon Willison',
-  "📉 Context rot is real: accuracy sags 30–50% before the window fills (Chroma, 18 models).",
+  "📉 A nearly full chat makes Claude less accurate, well before it runs out of room.",
   '💬 "AI tools amplify existing expertise." — Simon Willison. Review like a senior.',
   '💬 "I endeavor to always have an agent doing something." — Mitchell Hashimoto',
 ];

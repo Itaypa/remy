@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.5.0 — every tip says what happened, why it matters, and how to fix it
+
+Users told us they didn't fully understand REMY's tips. A line like
+`index.ts took 14 edits with 17 re-reads between them → /clear and re-brief rather than
+attempt 15 → saves ≈$0.47` names a number and a command, but never says *why* it is bad,
+and assumes words like "re-brief", "red zone", "tool schemas" and "cache-write price".
+
+Every tip and alert is rewritten for someone in their first week of Claude Code, and every
+surface now shows the same three parts.
+
+**The end-of-turn nudge is a three-line card:**
+
+```
+[🐭 REMY] 🔨 Stuck fixing the same file
+  What happened    Claude edited index.ts 14 times, re-reading it 9 times
+                   in between.
+  Why it matters   Every new try re-sends all the failed tries before it.
+                   This cost about $0.40.
+  How to fix       Type /clear, then explain the problem again in a
+                   sentence or two.
+```
+
+The spinner line carries the same three parts on one line, the `/remy` report uses the same
+labels, and the context alarm follows the same shape ("Claude's memory is almost full").
+
+**Plain words throughout.** "Claude's memory for this chat" instead of context window,
+"over 80% full" instead of red zone, "the Gmail MCP add-on's instructions" instead of tool
+schemas, "explain the problem again" instead of re-brief. Token amounts are spelled out
+("~12k tokens 🪙"); the coin is decoration, never the only unit. All 26 tips, the rotating
+hints, and the report labels changed; rules, thresholds and stored data did not, so tips
+already in your database render in the new shape.
+
+**Enforced.** `catalog.test.ts` now requires all three parts on every tip, caps each one's
+length, and fails the build on a ban list of the old jargon.
+
 ## v0.4.0 — a mouse with a sign, a sensor inside the host, and two tips about a bloated window
 
 **The art.** The welcome is now Joan G. Stark's ASCII mouse holding a sign that reads

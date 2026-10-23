@@ -233,8 +233,15 @@ function safeShortModel(id: string | null | undefined): string {
 
 /** A token count with its unit attached, so a template never concatenates a
  * suffix onto something that may have fallen back to a word. */
+/** "~140k tokens" — a token count spelled with its unit, for copy a
+ * beginner reads. A non-measurement reads as words rather than "0k". */
+function tokensPhrase(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "the whole chat";
+  return `~${kTokens(n)} tokens`;
+}
+
 function kTokens(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "the whole context";
+  if (!Number.isFinite(n) || n <= 0) return "the whole chat";
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1000))}k`;
 }
 
@@ -433,7 +440,7 @@ function applyClaudeMd(s: SessionSnapshot, findings: Finding[]): void {
     tipId: "claude-md-prune",
     evidence: {
       kb: Math.round(bytes / 1000),
-      md_tokens: kTokens(bytes / BYTES_PER_TOKEN),
+      md_tokens: tokensPhrase(bytes / BYTES_PER_TOKEN),
     },
     estSavingsTokens: Math.round((bytes - CLAUDE_MD_TARGET_BYTES) / BYTES_PER_TOKEN),
     estClass: "input",
@@ -507,7 +514,7 @@ function detectCacheExpiry(s: SessionSnapshot): Finding | null {
       gap: humanGap(s.cacheExpiryWorstGapMinutes),
       // Pre-formatted with its unit so the template never has to glue "k" onto
       // a value that might have fallen back to a word.
-      ctx: kTokens(s.cacheExpiryTokens / Math.max(1, s.cacheExpiries)),
+      ctx: tokensPhrase(s.cacheExpiryTokens / Math.max(1, s.cacheExpiries)),
     },
     // The raw re-written count. The 0.9 that used to sit here was the
     // difference between the cold and warm price expressed as a fudge on the
@@ -528,21 +535,21 @@ export const CACHE_MISS_MIN = 2;
  * deliberately absent: nothing the developer did, so nothing to coach. */
 const CACHE_MISS_CAUSES: Record<string, { cause: string; remedy: string }> = {
   tools_changed: {
-    cause: "the tool list changed",
-    remedy: "connect MCP servers and plugins before your first prompt, not mid-task",
+    cause: "add-ons or tools changed mid-task",
+    remedy: "connect add-ons and plugins before your first message, not halfway through",
   },
   system_prompt_changed: {
-    cause: "the system prompt changed",
-    remedy: "pick model, effort and settings up front; /clear before changing them",
+    cause: "the model or settings changed mid-task",
+    remedy: "pick the model and settings at the start, and /clear before changing them",
   },
   ttl_expired_5m: {
-    cause: "the 5-min cache expired between turns",
-    remedy: "set promptCacheTtl to 1h, or keep turns under 5 min apart",
+    cause: "you paused more than 5 minutes between messages",
+    remedy: "reply within 5 minutes, or set promptCacheTtl to 1h in settings",
   },
 };
 const CACHE_MISS_GENERIC = {
-  cause: "the cached prefix changed",
-  remedy: "pick model, effort and tools up front; /clear before changing them",
+  cause: "something in the chat's setup changed",
+  remedy: "pick the model, settings and add-ons at the start, and /clear before changing them",
 };
 const CACHE_MISS_UNCOACHABLE = new Set(["likely_server_side"]);
 
@@ -567,7 +574,7 @@ function detectCacheMisses(s: SessionSnapshot): Finding | null {
       cause: words.cause,
       remedy: words.remedy,
       // Per miss, pre-formatted with its unit like cache-idle's `ctx`.
-      ctx: kTokens(tokens / n),
+      ctx: tokensPhrase(tokens / n),
     },
     // What the misses re-wrote, at the price they re-wrote it: the host counts
     // `miss_recache_tokens` as cache-WRITE tokens, so the class is the one that
@@ -702,12 +709,12 @@ function detectContextTax(s: SessionSnapshot): Finding | null {
  * startup pack except messages, which is the session's own work. */
 function biggestCategory(c: ContextCategories): string {
   const named: Array<[string, number]> = [
-    ["the system prompt", c.system],
-    ["built-in tool schemas", c.tools],
-    ["CLAUDE.md and memory files", c.memory],
-    ["skill listings", c.skills],
+    ["Claude Code's own instructions", c.system],
+    ["built-in tool instructions", c.tools],
+    ["CLAUDE.md and memory notes", c.memory],
+    ["the list of skills", c.skills],
     ["agent descriptions", c.agents],
-    ["MCP tool schemas", c.mcp],
+    ["MCP add-on instructions", c.mcp],
   ];
   const [name, tokens] = named.reduce((a, b) => (b[1] > a[1] ? b : a));
   return `${name} (${kTokens(tokens)})`;

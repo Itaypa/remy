@@ -44,7 +44,7 @@ describe("renderReport", () => {
     expect(quiet).not.toContain("denied");
 
     const loud = renderReport({ session: session({ cache_read: 90_000, tokens_in: 10_000, perm_denials: 3 }), tips: [], active: null });
-    expect(loud).toContain("90% reused from cache");
+    expect(loud).toContain("90% of the chat re-read at the cheap cached price");
     expect(loud).toContain("3 denied");
   });
 
@@ -54,10 +54,11 @@ describe("renderReport", () => {
       tips: [tip({ est_savings_tokens: 55_000 }), tip({ id: 2, tip_id: "no-verify", est_savings_tokens: 0 })],
       active: null,
     });
-    expect(withWaste).toContain("Edit ping-pong on one file");
-    // The zero-value finding is filed but not shown — a "~0 🪙 recoverable"
+    expect(withWaste).toContain("Stuck fixing the same file");
+    expect(withWaste).toContain("could have saved");
+    // The zero-value finding is filed but not shown — a "could have saved ~0"
     // row is noise, not insight.
-    expect(withWaste).not.toContain("Edits shipped unverified");
+    expect(withWaste).not.toContain("Changes were never tested");
 
     const clean = renderReport({ session: session(), tips: [], active: null });
     expect(clean).toContain("✨ none — clean session!");
@@ -85,16 +86,14 @@ describe("renderReport", () => {
     });
     expect(flat(out)).toContain("🤖 you rewrote one file 14 times this week");
     // …and the templated version does not also appear.
-    expect(flat(out)).not.toContain("Same file edited");
+    expect(flat(out)).not.toContain("Claude edited");
   });
 
   test("an adaptive tip never leaks an unfilled placeholder into the report", () => {
-    // renderReport calls renderTemplate(def.fix) directly — it does NOT go
-    // through tipBody()'s title fallback. Today that is safe only because no
-    // tip's `fix` carries a placeholder and `what` is skipped whenever `why`
-    // is set. Both halves are pinned here and in the catalog test below,
-    // because the day someone adds {count} to a fix, every adaptive tip starts
-    // printing braces at the user.
+    // renderReport renders impact/action/detail straight through
+    // renderTemplate; only "What happened" has a fallback (the coach's `why`,
+    // then the title). Pinned here and in the catalog test, because the day
+    // someone adds {count} to an action, every adaptive tip prints braces.
     for (const tip_id of Object.keys(TIPS)) {
       const out = renderReport({
         session: session(),
@@ -105,7 +104,7 @@ describe("renderReport", () => {
     }
   });
 
-  test("every placeholder in a `fix` has a fallback — the report renders it without evidence", () => {
+  test("every placeholder in impact, action or detail has a fallback — the report renders them without evidence", () => {
     // This used to say "no fix may carry a placeholder at all", which was the
     // only way to hold the property before TipDef.fallbacks existed: the report
     // renders `fix` for adaptive rows that have no session numbers, straight
@@ -114,20 +113,29 @@ describe("renderReport", () => {
     // The rendering test above is the real guard; this one localizes the blame
     // to the catalog entry instead of a diff of the whole report.
     for (const [key, def] of Object.entries(TIPS)) {
-      for (const [, name] of def.fix.matchAll(/\{(\w+)\}/g)) {
-        expect(
-          def.fallbacks?.[name!],
-          `${key} fix uses {${name}} with no fallback; an adaptive tip would print it raw`,
-        ).toBeDefined();
+      for (const tpl of [def.impact, def.action, def.detail ?? ""]) {
+        for (const [, name] of tpl.matchAll(/\{(\w+)\}/g)) {
+          expect(
+            def.fallbacks?.[name!],
+            `${key} uses {${name}} with no fallback; an adaptive tip would print it raw`,
+          ).toBeDefined();
+        }
       }
     }
   });
 
-  test("the worth row appears only when there is something to recover", () => {
-    const worth = renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 55_000 }) });
-    expect(worth).toContain("back in your pocket");
-    const none = renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 0 }) });
-    expect(none).not.toContain("back in your pocket");
+  test("the next tip reads What happened / Why it matters / How to fix", () => {
+    const out = flat(renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 55_000 }) }));
+    const order = ["What happened", "Why it matters", "How to fix"].map((l) => out.indexOf(l));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  test("the cost sentence appears only when there is something to recover", () => {
+    const worth = flat(renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 55_000 }) }));
+    expect(worth).toMatch(/This cost about \$|That's about .* tokens/);
+    const none = flat(renderReport({ session: session(), tips: [], active: tip({ est_savings_tokens: 0 }) }));
+    expect(none).not.toMatch(/This cost about|That's about/);
   });
 
   test("the adaptive footer reflects the actual state and offers the opposite toggle", () => {
@@ -187,8 +195,8 @@ describe("renderWeek", () => {
     expect(out).toContain("4.0k 🪙");
     expect(out).toContain("$3.75");
     expect(out).toContain("2 sessions");
-    expect(out).toContain("waste caught: 3 tips");
-    expect(out).toContain("120k 🪙 recoverable");
+    expect(out).toContain("habits that cost extra: 3");
+    expect(out).toContain("could have saved ~120k tokens 🪙");
   });
 });
 

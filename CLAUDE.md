@@ -116,9 +116,13 @@ docs/                         # design-language.md · claude-code-surfaces.md ·
   `remy adapt --off` / `REMY_ADAPT=0` disables; `REMY_ADAPT_CMD` stubs the backend for
   tests. If the claude CLI is missing or fails, coaching degrades to pure deterministic —
   silently.
-- **Every rule-backed tip is three parts: `problem → action → earn`** (`TipDef.problem`
-  and `TipDef.action` in `core/src/catalog.ts`; `catalog.test.ts` enforces the shape). The
-  earn is **never authored** — `earnClause()` derives it from the finding's estimate, its
+- **Every tip is three parts: What happened → Why it matters → How to fix**
+  (`TipDef.problem`, `TipDef.impact`, `TipDef.action` in `core/src/catalog.ts`), written in
+  plain words for a first-week Claude Code user: "Claude's memory for this chat", not
+  "context window"; "the {server} MCP add-on's instructions", not "tool schemas".
+  `catalog.test.ts` enforces the shape, the lengths and a **jargon ban list**. The Stop
+  nudge renders them as a three-line card (`tipCard()`), the spinner as one line
+  (`tipLineLong()`). The cost sentence ("This cost about $0.40.") is **never authored** — `earnClause()` derives it from the finding's estimate, its
   price class, and the session's own measured `cost_usd`. Every `Finding` must declare an
   `estClass` (`cache-read` 0.1× · `input` 1× · `cold-write` 1.9×), because raw token counts
   are not comparable: ~99% of a session's tokens are cache reads, and the queue **ranks by

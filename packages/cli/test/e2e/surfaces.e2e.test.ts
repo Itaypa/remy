@@ -73,14 +73,18 @@ describe("the surfaces a coached developer actually sees", () => {
     const { stop } = await driveSession(w, thrash);
     const active = tips(w).find((t) => t.status === "active")!;
 
-    // tipLineLong, not tipLine: the nudge is a full-width transient message,
-    // so it gets the three-part line (evidence → action → earn) rather than
-    // the 55-char form the boxed splash needs.
-    const { tipLineLong } = await import("../../src/ui");
-    expect(systemMessage(stop)).toBe(tipLineLong(active as never, session(w) as never));
+    // The three-line card: the nudge is a full-width transient message, so it
+    // gets labeled What happened / Why it matters / How to fix rows rather
+    // than the 55-char form the boxed splash needs.
+    const { tipCard } = await import("../../src/ui");
+    expect(systemMessage(stop)).toBe(tipCard(active as never, session(w) as never));
     // And it is the whole shape, not just a paraphrase of the title.
-    expect(systemMessage(stop)).toContain("took 6 edits with 3 re-reads between them");
-    expect(systemMessage(stop)).toContain("→ /clear and re-brief rather than attempt 7");
+    const nudge = systemMessage(stop)!.replace(/\s+/g, " ");
+    expect(nudge).toContain("What happened Claude edited one file 6 times, re-reading it 3 times in between.");
+    expect(nudge).toContain("Why it matters");
+    expect(nudge).toContain("How to fix Type /clear");
+    // Every line fits an 80-column terminal, where most people open one.
+    for (const line of systemMessage(stop)!.split("\n")) expect(line.length, line).toBeLessThanOrEqual(80);
   });
 
   test("an overflowing context outranks the coaching tip", async () => {
@@ -202,7 +206,7 @@ describe("the sensor mod's report reaches the coaching line", () => {
     // called — here, from the Gmail call recorded in another session.
     await hook(w, "PostToolUse", { tool_name: "mcp__claude_ai_Gmail__search_threads", tool_input: {}, tool_response: {} }, "other-session");
     const rendered = stripAnsi((await remy(w, ["report"])).stdout);
-    expect(rendered).toContain("An MCP server you never called");
+    expect(rendered).toContain("An add-on you never used");
     expect(rendered).toContain("claude_ai_Gmail");
     expect(privacyLeaks(w)).toEqual([]);
   });
@@ -212,6 +216,6 @@ describe("the sensor mod's report reaches the coaching line", () => {
     await driveSession(w, heavy);
     expect(activeTipId(w)).toBe("context-tax");
     const rendered = stripAnsi((await remy(w, ["report"])).stdout);
-    expect(rendered).toContain("skills, MCP and CLAUDE.md");
+    expect(rendered).toContain("skills, MCP add-ons and");
   });
 });

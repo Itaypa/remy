@@ -155,7 +155,7 @@ export function buildAdaptPayload(db: Database, nowIso: string): AdaptPayload {
 /** The full prompt for the headless call: catalog + profile + strict output contract. */
 export function buildAdaptPrompt(payload: AdaptPayload): string {
   const catalog = Object.values(TIPS)
-    .map((t) => `- ${t.id}: ${t.title} — ${t.what} Fix: ${t.fix}`.slice(0, 220))
+    .map((t) => `- ${t.id}: ${t.title} — ${t.problem}; ${t.impact}. Fix: ${t.action}`.slice(0, 220))
     .join("\n");
   return [
     `You are the coaching analyzer for ${BRAND}, a tool that helps developers drive AI coding agents well.`,

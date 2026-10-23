@@ -101,7 +101,7 @@ describe("spinner tip override", () => {
     // Two entries → the host rotates between them across waits; one entry
     // would have parked on the first finding until it was dismissed.
     expect(tips).toHaveLength(2);
-    expect(tips[1]).toContain("got read 12× this session");
+    expect(tips[1]).toContain("12 times this session");
   });
 
   test("an unresolvable file hash degrades to the catalog's wording, never a placeholder", () => {
@@ -119,12 +119,12 @@ describe("spinner tip override", () => {
     claimSpinnerTips(db, [orphan]);
     const line = read().spinnerTipsOverride.tips[0];
     expect(line).not.toMatch(/\{\w+\}/);
-    expect(line).toContain("one file took 14 edits with 19 re-reads between them");
+    expect(line).toContain("Claude edited one file 14 times, re-reading it 19 times in between");
 
     // …and resolves to the real name when the map has it.
     expect(
       desiredTips([orphan], { files: new Map([["deadbeefdeadbeef", "packages/cli/src/index.ts"]]) })[0],
-    ).toContain("packages/cli/src/index.ts took 14 edits with 19 re-reads between them");
+    ).toContain("Claude edited packages/cli/src/index.ts 14 times, re-reading it 19 times in between");
   });
 
   test("the line speaks the session's own evidence, not the statusline shorthand", () => {
@@ -132,9 +132,9 @@ describe("spinner tip override", () => {
     const line = read().spinnerTipsOverride.tips[0];
     // The three parts: evidence the developer recognizes, the thing to do,
     // and what it is worth — which here is not tokens, and says so.
-    expect(line).toContain("9 edits across 3 files; of 4 shell runs (3 git, 1 file read), not one was a test or build");
-    expect(line).toContain("→ end with a check it can run");
-    expect(line).toContain("→ worth: fewer bugs, not fewer tokens");
+    expect(line).toContain("Claude made 9 edits across 3 files and never ran a test or a build");
+    expect(line).toContain("→ finish by asking Claude to run the tests");
+    expect(line).toContain("(gain: fewer bugs, not saved tokens)");
     expect(line).not.toContain("🪙");
     expect(line).toContain(BRAND);
   });

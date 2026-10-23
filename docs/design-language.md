@@ -221,18 +221,15 @@ carries an exact number.
   rotates between deck entries on its own, so the line **moves to the next
   finding by itself between waits** — dismissing is for silencing a tip for
   30 days, not for advancing the queue.
-  **Wide-surface copy (`TipDef.problem` + `TipDef.action`, rendered by
-  `tipLineLong()`).** Same skeleton as everywhere else — `[Brand]: {emoji}
-  problem → solution → value` — but the problem clause is the long form, spoken
-  to the player with the session's own evidence: `[🐭 REMY]: 🔨
-  packages/cli/src/index.ts took 14 edits with 19 re-reads between them →
-  /clear and re-brief rather than attempt 15 → saves ≈$0.40`. Every rule-backed
-  tip carries both halves (composed ≤140 chars, enforced in `catalog.test.ts`,
-  and `problem` must contain a number from the evidence — advice without the
-  receipt is off-register). Wisdom tips have no
-  session evidence, so they fall back to `short`; the hint deck carries
-  attributed quotes instead. That's the rule: **live evidence when we have
-  it, a citation when we don't.**
+  **Wide-surface copy (`TipDef.problem` + `impact` + `action`, rendered on
+  one line by `tipLineLong()`).** Same three parts as the nudge card, in the
+  same order: `[🐭 REMY]: 🔨 Claude edited index.ts 14 times, re-reading it 9
+  times in between — every new try re-sends all the failed tries before it
+  (≈$0.40) → type /clear, then explain the problem again in a sentence or
+  two`. A rule tip's `problem` must contain a number from the evidence —
+  advice without the receipt is off-register. Wisdom tips say it plainly with
+  no numbers; the hint deck carries attributed quotes. That's the rule: **live
+  evidence when we have it, a citation when we don't.**
   It's the only surface read *while waiting* rather than while acting, which
   is exactly when advice is cheap to absorb. Mechanics in
   `docs/claude-code-surfaces.md`. Two rules make it safe: **opt-in** (`coach
@@ -242,14 +239,21 @@ carries an exact number.
   didn't write is the user's; deleting the key by hand is a valid uninstall).
   Noise budget is unchanged — it's the same one active tip, shown where it's
   already being waited on, not an extra interruption.
-- **Every tip shows its why — as labeled rows, idiot-proof by design.** In
-  `/remy` a tip is never a paragraph; it's a scan-able ledger of rows:
-  `what happened` (one sentence with the player's numbers — the analyzer's
-  `🤖` line for adaptive tips, the `what` template for rule tips) ·
-  `worth` (`~165k 🪙 back in your pocket`, only when > 0) · `next time`
-  (one imperative action, the `fix` template) · `the experts`
-  (`📖 "<quote>" — <author>` when cited). Advice without a mechanism or a
-  source is off-register; tip copy lives in `what`/`fix` on each TipDef.
+- **Every tip is What happened → Why it matters → How to fix, in words a
+  beginner knows.** Users told us the old lines read like insider shorthand
+  ("re-brief", "red zone", "tool schemas", "cache-write price"), and a line
+  that names a number and a command without saying *why* gives no reason to
+  act. So every surface renders the same three parts: the end-of-turn nudge
+  as a labeled card (`tipCard()`), the spinner as one line, `/remy` as rows —
+  `What happened` (the player's own numbers, or the analyzer's `🤖` line) ·
+  `Why it matters` (the mechanism in one clause, then the measured cost:
+  "This cost about $0.40.") · `How to fix` (one step, commands explained) ·
+  `Tip` (optional extra) · `The experts` (`📖 "<quote>" — <author>`).
+  Vocabulary: "Claude's memory for this chat" not context window; "over 80%
+  full" not red zone; "the {server} MCP add-on" not tool schemas; "the cache
+  … full price" not prefix or cache-write; "explain the problem again" not
+  re-brief. 🪙 may sit beside a number as decoration ("~12k tokens 🪙") but
+  never carries meaning alone. `catalog.test.ts` bans the old terms.
 - **Adaptive Coach (the one model call):** out-of-band, ≤1/day, metadata-only
   payload (zod whitelist), silent on failure. Its output enters the same
   one-tip queue — noise budget unchanged. `/remy` footer states it plainly:

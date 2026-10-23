@@ -401,7 +401,7 @@ describe("waste signatures", () => {
     );
     const f = yes.find((x) => x.tipId === "cache-idle");
     expect(f).toBeDefined();
-    expect(f!.evidence).toEqual({ count: 2, mins: 120, gap: "2.0h", ctx: "140k" });
+    expect(f!.evidence).toEqual({ count: 2, mins: 120, gap: "2.0h", ctx: "~140k tokens" });
     // The raw re-written count, with the cold-vs-warm price difference now
     // carried by the class instead of a 0.9 fudge on the token count.
     expect(f!.estSavingsTokens).toBe(280_000);
@@ -420,9 +420,9 @@ describe("waste signatures", () => {
     expect(f).toBeDefined();
     expect(f!.evidence).toEqual({
       count: 3,
-      cause: "the tool list changed",
-      remedy: "connect MCP servers and plugins before your first prompt, not mid-task",
-      ctx: "140k",
+      cause: "add-ons or tools changed mid-task",
+      remedy: "connect add-ons and plugins before your first message, not halfway through",
+      ctx: "~140k tokens",
     });
     expect(f!.estSavingsTokens).toBe(420_000);
     expect(f!.estClass).toBe("cold-write");
@@ -471,7 +471,7 @@ describe("waste signatures", () => {
     ).find((x) => x.tipId === "cache-miss");
     expect(f).toBeDefined();
     expect(JSON.stringify(f!.evidence)).not.toContain("some_future_cause");
-    expect(f!.evidence.cause).toBe("the cached prefix changed");
+    expect(f!.evidence.cause).toBe("something in the chat's setup changed");
   });
 
   test("context-band fires after 3 red-zone turns with the excess as savings", () => {
@@ -809,7 +809,7 @@ describe("mcp-idle — a server whose schemas ride every turn and that nobody ca
         contextCategories: { system: 3_000, tools: 12_000, memory: 18_000, skills: 4_000, agents: 500, mcp: 62_000 },
       }),
     ).find((x) => x.tipId === "context-tax")!;
-    expect(f.evidence.biggest).toBe("MCP tool schemas (62k)");
+    expect(f.evidence.biggest).toBe("MCP add-on instructions (62k)");
     const unreported = analyzeSession(snapshot({ firstContextTokens: 90_000 })).find((x) => x.tipId === "context-tax")!;
     expect(unreported.evidence).not.toHaveProperty("biggest");
   });
