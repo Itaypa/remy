@@ -525,6 +525,37 @@ export const TIPS: Record<string, TipDef> = {
       quote: "A one-line question in a session that has been open all day still draws usage for the whole conversation.",
     },
   },
+  // The third cache tip, and the only one whose evidence is the host's rather
+  // than ours: Claude Code ≥ 2.1.260 diagnoses why a request missed its cached
+  // prefix (`prompt_cache.last_miss_cause` on the statusline payload) and the
+  // rule repeats that diagnosis in plain words. `cache-idle` is about leaving
+  // a session alone too long; this is about changing it mid-task — a plugin
+  // enabled, an MCP server connected, a model switched — which costs the same
+  // full re-write a cold return does, and is just as avoidable.
+  "cache-miss": {
+    id: "cache-miss",
+    docs: "https://code.claude.com/docs/en/prompt-caching",
+    emoji: "🧩",
+    title: "The cache kept getting invalidated",
+    short: "Cache invalidated {count}× → change settings between tasks",
+    problem: "{count} cache misses: {cause}, each re-writing {ctx}",
+    // The remedy depends on the cause, so the rule supplies it — from a closed
+    // set in rules.ts, never from host text. The fallback covers adaptive rows
+    // and rows written before the host named a cause.
+    action: "{remedy}",
+    fallbacks: {
+      cause: "the cached prefix changed",
+      ctx: "the whole context",
+      remedy: "pick model, effort and tools up front; /clear before changing them",
+    },
+    what: "{count}× this session a request no longer matched its cached prefix ({cause}), so the next turn re-wrote ~{ctx} at the cache-write price instead of reading it at a tenth.",
+    fix: "{remedy}. Claude Code names the likely cause of the last miss on /usage, under Prompt cache (main) — check it before the next big change.",
+    cite: {
+      source: "Claude Code docs",
+      url: "https://code.claude.com/docs/en/prompt-caching",
+      quote: "Pick your model and effort level at the top of a session, then save /compact for natural breaks between tasks. The fewer changes you make mid-task, the higher your cache hit rate.",
+    },
+  },
   // The wisdom half of the cache story. `cache-idle` is the deterministic rule
   // that fires AFTER a cold resume has already been paid for; this one explains
   // the 🔥/🧊 statusline clock, which is the only surface that can speak while

@@ -95,6 +95,14 @@ export interface SessionSnapshot {
    * this session called it (store.ts `mcpServerProfile`). `mcp-idle`'s input.
    * Absent = the mod never reported; an empty list = no servers. */
   mcpServers?: McpServerProfile[];
+  /** The host's own prompt-cache miss diagnosis, copied off the statusline
+   * payload into the session row (store.ts). Optional and nullable: an older
+   * host sends nothing, and the rule stays silent rather than guess. */
+  cacheMisses?: number | null;
+  cacheMissTokens?: number | null;
+  /** Most frequent cause, as the host names it (`tools_changed`, …). */
+  cacheMissCause?: string | null;
+  cacheMissCauseN?: number | null;
 }
 
 export interface ContextCategories {
@@ -356,6 +364,9 @@ export function analyzeSession(s: SessionSnapshot): Finding[] {
   const expiry = detectCacheExpiry(s);
   if (expiry) findings.push(expiry);
 
+  const misses = detectCacheMisses(s);
+  if (misses) findings.push(misses);
+
   const redZone = detectRedZoneRiding(s);
   if (redZone) findings.push(redZone);
 
@@ -503,6 +514,65 @@ function detectCacheExpiry(s: SessionSnapshot): Finding | null {
     // token count; that belongs in the price class, where it can be stated
     // once and applied consistently.
     estSavingsTokens: s.cacheExpiryTokens,
+    estClass: "cold-write",
+  };
+}
+
+/** Fewer than this and the host's count is a session start or one deliberate
+ * change; two is a pattern worth a sentence. */
+export const CACHE_MISS_MIN = 2;
+
+/** The miss causes a developer can do something about, in the words the tip
+ * uses. Closed set, so evidence never echoes a host string it has not seen
+ * before — an unknown cause gets the generic pair. `likely_server_side` is
+ * deliberately absent: nothing the developer did, so nothing to coach. */
+const CACHE_MISS_CAUSES: Record<string, { cause: string; remedy: string }> = {
+  tools_changed: {
+    cause: "the tool list changed",
+    remedy: "connect MCP servers and plugins before your first prompt, not mid-task",
+  },
+  system_prompt_changed: {
+    cause: "the system prompt changed",
+    remedy: "pick model, effort and settings up front; /clear before changing them",
+  },
+  ttl_expired_5m: {
+    cause: "the 5-min cache expired between turns",
+    remedy: "set promptCacheTtl to 1h, or keep turns under 5 min apart",
+  },
+};
+const CACHE_MISS_GENERIC = {
+  cause: "the cached prefix changed",
+  remedy: "pick model, effort and tools up front; /clear before changing them",
+};
+const CACHE_MISS_UNCOACHABLE = new Set(["likely_server_side"]);
+
+// The cache was invalidated by something the developer changed mid-session —
+// the host's own diagnosis (`prompt_cache.misses` with a cause), not ours. It
+// already excludes compaction and tool-result clearing, which are expected
+// rebuilds, so any count here is a real miss. Yields to `cache-idle` when the
+// cause is the TTL and that rule has already filed the idle-gap story: two
+// tips for the same cold return is a nag, not coaching.
+function detectCacheMisses(s: SessionSnapshot): Finding | null {
+  const n = s.cacheMisses ?? 0;
+  if (n < CACHE_MISS_MIN) return null;
+  const cause = s.cacheMissCause ?? null;
+  if (cause !== null && CACHE_MISS_UNCOACHABLE.has(cause)) return null;
+  if (cause === "ttl_expired_5m" && s.cacheExpiries > 0) return null;
+  const words = (cause !== null && CACHE_MISS_CAUSES[cause]) || CACHE_MISS_GENERIC;
+  const tokens = s.cacheMissTokens ?? 0;
+  return {
+    tipId: "cache-miss",
+    evidence: {
+      count: n,
+      cause: words.cause,
+      remedy: words.remedy,
+      // Per miss, pre-formatted with its unit like cache-idle's `ctx`.
+      ctx: kTokens(tokens / n),
+    },
+    // What the misses re-wrote, at the price they re-wrote it: the host counts
+    // `miss_recache_tokens` as cache-WRITE tokens, so the class is the one that
+    // bills them at 2× against the 0.1× a warm read would have cost.
+    estSavingsTokens: tokens,
     estClass: "cold-write",
   };
 }

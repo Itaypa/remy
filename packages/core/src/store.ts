@@ -3,7 +3,7 @@ import { mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envVar } from "./env";
-import { Hash16, IsoTs, ModelStr, hashPath } from "./schema";
+import { CacheMissCause, Hash16, IsoTs, ModelStr, hashPath } from "./schema";
 import type { ContextProfile, SessionEvent } from "./schema";
 
 /** `~/.remy`, unless an install predates the rename — then its `~/.coach`
@@ -216,6 +216,25 @@ function migrate(db: Database): void {
     ts TEXT NOT NULL,
     PRIMARY KEY (session_id, server_hash)
   )`);
+  // The host's own diagnosis of this session's prompt-cache misses, copied off
+  // the statusline payload's `prompt_cache` object (Claude Code ≥ 2.1.251):
+  //   cache_misses       requests that re-processed content the cache already
+  //                      held, by the host's definition (>5% and ≥2k tokens of
+  //                      what could have been read, with no compaction to
+  //                      explain it) — so a count of 1 is a real miss
+  //   cache_miss_tokens  what those misses re-wrote, in cache-write tokens
+  //   cache_miss_cause   the most frequent diagnosed cause — a host enum name
+  //                      (`tools_changed`, `system_prompt_changed`,
+  //                      `ttl_expired_5m`, `likely_server_side`, …), gated to
+  //                      [a-z0-9_] at the write site so nothing path- or
+  //                      prose-shaped can land here
+  //   cache_miss_cause_n how many of the misses carried that cause
+  // Written by the statusline only when the count moves (a quiet session
+  // stays read-only); NULL = host never sent the object.
+  addColumnIfMissing(db, "sessions", "cache_misses", "cache_misses INTEGER");
+  addColumnIfMissing(db, "sessions", "cache_miss_tokens", "cache_miss_tokens INTEGER");
+  addColumnIfMissing(db, "sessions", "cache_miss_cause", "cache_miss_cause TEXT");
+  addColumnIfMissing(db, "sessions", "cache_miss_cause_n", "cache_miss_cause_n INTEGER");
   // Generic local kv: tip throttles, spinner ownership, welcome_version,
   // the adaptive analyzer's clock. Named for a sync that no longer exists —
   // kept as-is so an existing ~/.remy/remy.db upgrades without a migration.
@@ -379,6 +398,12 @@ export interface SessionRow {
   ctx_agents_tokens: number | null;
   ctx_mcp_tokens: number | null;
   ctx_messages_tokens: number | null;
+  /** The host's prompt-cache miss diagnosis (local-only). NULL = the host
+   * never sent `prompt_cache`. See the migration comment. */
+  cache_misses: number | null;
+  cache_miss_tokens: number | null;
+  cache_miss_cause: string | null;
+  cache_miss_cause_n: number | null;
 }
 
 export interface TipRow {
@@ -656,6 +681,38 @@ export function setCacheClock(db: Database, sessionId: string, ttlMs: number | n
        cache_model = COALESCE(?, cache_model) WHERE session_id = ?`,
   ).run(ttl, m, sessionId);
   if (ttl !== null) setSyncState(db, CACHE_TTL_KEY, String(ttl));
+}
+
+/** What the statusline copies off the host's `prompt_cache` object. Built by
+ * `cacheMissesFromPayload` in transcript.ts; stored by the writer below. */
+export interface CacheMissStats {
+  misses: number;
+  recacheTokens: number;
+  /** Most frequent diagnosed cause, as the host names it, or null. */
+  cause: string | null;
+  causeCount: number;
+}
+
+/** Record the host's cache-miss diagnosis. Same coercion contract as every
+ * sibling — INTEGER affinity would store a string, so the write site is the
+ * guarantee — plus a charset gate on the one TEXT column: a cause is a host
+ * enum name, and anything that is not `[a-z0-9_]` (a path, a sentence, a
+ * marker) is stored as "no cause" rather than as itself. All four land or
+ * none do: a cause with no count, or a count with no misses, is a number
+ * nothing can explain. */
+export function setCacheMisses(db: Database, sessionId: string, s: unknown): void {
+  const whole = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
+  const st = s as Record<string, unknown> | null;
+  const misses = whole(st?.misses);
+  const tokens = whole(st?.recacheTokens);
+  const causeCount = whole(st?.causeCount);
+  const cause = CacheMissCause.safeParse(st?.cause).data ?? null;
+  const ok = misses !== null && tokens !== null && causeCount !== null;
+  db.query(
+    `UPDATE sessions SET cache_misses = ?, cache_miss_tokens = ?, cache_miss_cause = ?, cache_miss_cause_n = ?
+     WHERE session_id = ?`,
+  ).run(...(ok ? [misses, tokens, cause, cause === null ? 0 : causeCount] : [null, null, null, null]), sessionId);
 }
 
 export function getSession(db: Database, sessionId: string): SessionRow | null {

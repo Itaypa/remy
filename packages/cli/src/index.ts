@@ -23,9 +23,11 @@ import {
   setSubagentStats,
   setEffortMix,
   setCacheClock,
+  setCacheMisses,
   touchCacheAnchor,
   CACHE_TTL_KEY,
   parseAdaptOutput,
+  cacheMissesFromPayload,
   contextFromPayload,
   binDir,
   contextLimit,
@@ -71,8 +73,11 @@ import {
   cacheField,
   contextAlarmLine,
   fmtTok,
+  hostCacheField,
   linksEnabled,
   modelEmoji,
+  modelField,
+  prField,
   renderReport,
   renderWeek,
   rotatingHint,
@@ -545,6 +550,12 @@ async function analyzeTranscript(
     // that as "unknown" and stay quiet.
     claudeMdBytes: row?.claude_md_bytes ?? null,
     skillBytes: row?.skill_bytes ?? null,
+    // The host's cache-miss diagnosis, copied off the statusline payload one
+    // tick at a time (see statusline()). NULL on a host that predates it.
+    cacheMisses: row?.cache_misses ?? null,
+    cacheMissTokens: row?.cache_miss_tokens ?? null,
+    cacheMissCause: row?.cache_miss_cause ?? null,
+    cacheMissCauseN: row?.cache_miss_cause_n ?? null,
   });
   // Anti-nag: a user whose recent habit is already plan-first doesn't need
   // the plan-mode tip re-filed for the occasional direct session.
@@ -805,6 +816,18 @@ async function statusline(): Promise<void> {
   const cost: number | undefined = payload.cost?.total_cost_usd;
   const row = getSession(db, sessionId);
   syncSessionStats(db, sessionId, cwdHash, payload.model?.id, cost, pct, hostCtx?.limit ?? null, row);
+  // The host's cache-miss diagnosis, for the `cache-miss` rule. Same write
+  // discipline as the stats above: the count only ever moves at a request
+  // boundary, so a quiet session never writes. After syncSessionStats, which
+  // guarantees the row exists on a session's very first tick.
+  const misses = cacheMissesFromPayload(payload);
+  if (misses && misses.misses !== (row?.cache_misses ?? null)) {
+    try {
+      setCacheMisses(db, sessionId, misses);
+    } catch (err) {
+      logError("statusline-write", err);
+    }
+  }
 
   const git = await gitStatus(cwd);
 
@@ -819,11 +842,17 @@ async function statusline(): Promise<void> {
   // gap — a brand-new session hasn't been analyzed yet, but the host's cache
   // policy doesn't change between one session and the next.
   const ttlMs = row?.cache_ttl_ms ?? (Number(getSyncState(db, CACHE_TTL_KEY)) || null);
+  // The host's own `prompt_cache.expires_at` when it sends one (≥ 2.1.251);
+  // our transcript-derived TTL + hook-stamped anchor on older hosts.
+  const hostCache = hostCacheField(payload.prompt_cache, row?.cache_model, payload.model?.id);
+  const cache =
+    hostCache !== undefined ? hostCache : cacheField(ttlMs, row?.cache_anchor_at, row?.cache_model, payload.model?.id);
   const parts = [
-    `${modelEmoji(payload.model?.id)} ${payload.model?.display_name ?? "Claude"}`,
+    modelField(payload.model?.id, payload.model?.display_name, payload.effort?.level, payload.fast_mode),
     `⚡ ${pctStr} ctx ${bar(pct, 5)}`,
-    cacheField(ttlMs, row?.cache_anchor_at, row?.cache_model, payload.model?.id),
+    cache,
     branch,
+    prField(payload.pr),
     spendField(cost, payload.rate_limits),
   ].filter(Boolean);
   console.log(parts.join(ansi("dim", " · ")));

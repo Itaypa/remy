@@ -25,6 +25,12 @@ export const Hash16 = z.string().regex(/^[0-9a-f]{16}$/);
 export const HostStr = z.string().min(1).max(32).regex(/^[a-z0-9-]+$/);
 export const HostVersionStr = z.string().min(1).max(32).regex(/^[\w.-]+$/);
 export const ToolNameStr = z.string().min(1).max(64).regex(/^[\w.:-]+$/);
+// A prompt-cache miss cause as Claude Code names it on the statusline payload
+// (`tools_changed`, `system_prompt_changed`, `ttl_expired_5m`,
+// `likely_server_side`, …). Snake-case identifiers only: no slash, no space,
+// no dot, no upper case — the host's own enum shape, and nothing a prompt or
+// a path could be mistaken for.
+export const CacheMissCause = z.string().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/);
 
 export const EventTypeSchema = z.enum([
   "session_start",

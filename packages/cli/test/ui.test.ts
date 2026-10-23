@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { BRAND, HINTS, TIPS, type SessionRow, type TipRow } from "@ccpp/core";
-import { ART, WELCOME_ART, bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, linksEnabled, modelEmoji, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
+import { ART, WELCOME_ART, awakeSeconds, bar, cacheField, contextAlarmLine, earnClause, earnDollars, fmtCost, fmtTok, hostCacheField, humanDur, linksEnabled, modelEmoji, modelField, prField, rateLimitBadge, rotatingHint, spendField, splash, tipLine, tipLineLong, weekTotals } from "../src/ui";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+const plainText = (s: string | null | undefined) => (s ?? "").replace(/\x1b\[[0-9;]*m/g, "");
 
 function tipRow(overrides: Partial<TipRow>): TipRow {
   return {
@@ -254,6 +256,223 @@ describe("rateLimitBadge", () => {
     expect(rateLimitBadge({ five_hour: { used_percentage: 79 } })).toContain(yellow);
     expect(rateLimitBadge({ five_hour: { used_percentage: 60 } })).toContain(yellow);
     expect(rateLimitBadge({ five_hour: { used_percentage: 59 } })).not.toContain(yellow);
+  });
+});
+
+describe("rateLimitBadge — pace, once the host says when the window resets", () => {
+  // Fixed clock, UTC, so the awake-hours arithmetic is checkable by hand:
+  // 2026-08-20 12:00:00Z is a Thursday noon.
+  const NOW = Date.UTC(2026, 7, 20, 12, 0, 0);
+  const sec = NOW / 1000;
+  const red = "\x1b[31m";
+  const yellow = "\x1b[33m";
+  const badge = (rl: unknown) => rateLimitBadge(rl, NOW, 0);
+
+  test("the same percentage is calm or alarming depending on how far through the window you are", () => {
+    // 43% used, 4h left of 5h: 20% of the window gone, 23 points ahead → yellow.
+    const early = badge({ five_hour: { used_percentage: 43, resets_at: sec + 4 * 3600 } });
+    expect(early).toContain(yellow);
+    expect(plainText(early)).toContain("out in");
+    // 43% used, 20 minutes left: 93% of the window gone → nothing to say.
+    const late = badge({ five_hour: { used_percentage: 43, resets_at: sec + 20 * 60 } });
+    expect(late).not.toContain(yellow);
+    expect(late).not.toContain(red);
+    expect(plainText(late)).toBe("⏳ 43% (5h) ↻20m");
+  });
+
+  test("on pace, the tail is the countdown to reset; over pace, it is the forecast", () => {
+    // 50% used, 50% elapsed → on the line exactly.
+    expect(plainText(badge({ five_hour: { used_percentage: 50, resets_at: sec + 2.5 * 3600 } }))).toBe(
+      "⏳ 50% (5h) ↻2h30m",
+    );
+    // 60% used after 1h of 5h: 60%/h → the rest (40%) goes in 40 minutes.
+    expect(plainText(badge({ five_hour: { used_percentage: 60, resets_at: sec + 4 * 3600 } }))).toBe(
+      "⏳ 60% (5h) out in 40m",
+    );
+  });
+
+  test("escalation: +10 points yellow, +25 red, and 90% red whatever the pace", () => {
+    const at = (pct: number, elapsedH: number) =>
+      badge({ five_hour: { used_percentage: pct, resets_at: sec + (5 - elapsedH) * 3600 } });
+    expect(at(30, 1)).toContain(yellow); // +10
+    expect(at(29, 1)).not.toContain(yellow); // +9
+    expect(at(45, 1)).toContain(red); // +25
+    expect(at(44, 1)).not.toContain(red); // +24, yellow
+    expect(at(44, 1)).toContain(yellow);
+    // 92% used with the window nearly over: on pace, but one fat turn from
+    // the wall.
+    expect(at(92, 4.9)).toContain(red);
+  });
+
+  test("picks the window that is furthest ahead of its clock, not the highest number", () => {
+    // 5h: 80% used, 10 min left → well under pace. 7d: 60% used, 30% elapsed
+    // → 30 points ahead. The week is the one that needs a decision.
+    const out = badge({
+      five_hour: { used_percentage: 80, resets_at: sec + 10 * 60 },
+      seven_day: { used_percentage: 60, resets_at: sec + 0.7 * 7 * 86_400 },
+    });
+    expect(plainText(out)).toContain("(7d)");
+    expect(out).toContain(red);
+  });
+
+  test("…unless one of them is about to hit the wall", () => {
+    const out = badge({
+      five_hour: { used_percentage: 91, resets_at: sec + 10 * 60 },
+      seven_day: { used_percentage: 60, resets_at: sec + 0.7 * 7 * 86_400 },
+    });
+    expect(plainText(out)).toContain("91% (5h)");
+  });
+
+  test("a window without resets_at falls back to the fixed thresholds and no tail", () => {
+    const out = badge({ five_hour: { used_percentage: 70 } });
+    expect(plainText(out)).toBe("⏳ 70% (5h)");
+    expect(out).toContain(yellow);
+  });
+
+  test("the week is paced in awake hours, so a night asleep does not read as falling behind", () => {
+    // Window started exactly 24h ago. Wall share = 1/7 ≈ 14.3%. Awake share:
+    // one full day of 18 awake hours out of 7×18 → also 1/7 — the sleep block
+    // (02:00–08:00) falls wholly inside both the elapsed day and every other
+    // day, so the two agree. Now move the start to 3h ago at 09:00: no sleep
+    // elapsed yet, so awake share (3/126 = 2.4%) runs AHEAD of wall share
+    // (3/168 = 1.8%) and a developer at 2.4% used is exactly on the line.
+    const start = sec - 3 * 3600;
+    const resets = start + 7 * 86_400;
+    const out = badge({ seven_day: { used_percentage: 2.4, resets_at: resets } });
+    expect(out).not.toContain(yellow);
+  });
+});
+
+describe("awakeSeconds — the week has nights in it", () => {
+  const DAY = 86_400;
+  // 2026-08-20T00:00Z; with offset 0 the sleep block is 02:00–08:00 UTC.
+  const T0 = Date.UTC(2026, 7, 20) / 1000;
+  test("a whole day is 18 awake hours", () => {
+    expect(awakeSeconds(T0, T0 + DAY, 0)).toBe(18 * 3600);
+  });
+  test("an interval entirely inside the sleep block is zero", () => {
+    expect(awakeSeconds(T0 + 3 * 3600, T0 + 5 * 3600, 0)).toBe(0);
+  });
+  test("an interval that straddles the block loses only the overlap", () => {
+    // 01:00 → 09:00: 8 wall hours, 6 asleep.
+    expect(awakeSeconds(T0 + 1 * 3600, T0 + 9 * 3600, 0)).toBe(2 * 3600);
+  });
+  test("a week is 7 × 18 hours", () => {
+    expect(awakeSeconds(T0 + 5 * 3600, T0 + 5 * 3600 + 7 * DAY, 0)).toBe(7 * 18 * 3600);
+  });
+  test("the timezone offset moves the block with local time", () => {
+    // UTC−3 (offset +180): local 02:00 is 05:00Z, so 03:00Z–05:00Z is awake.
+    expect(awakeSeconds(T0 + 3 * 3600, T0 + 5 * 3600, 180)).toBe(2 * 3600);
+  });
+  test("a backwards or empty interval is zero, never negative", () => {
+    expect(awakeSeconds(T0, T0, 0)).toBe(0);
+    expect(awakeSeconds(T0 + 10, T0, 0)).toBe(0);
+  });
+});
+
+describe("humanDur — minute resolution, like the cache clock", () => {
+  test("renders the way a developer would say it", () => {
+    expect(humanDur(30)).toBe("<1m");
+    expect(humanDur(45 * 60)).toBe("45m");
+    expect(humanDur(2 * 3600 + 10 * 60)).toBe("2h10m");
+    expect(humanDur(2 * 3600 + 5 * 60)).toBe("2h05m");
+    expect(humanDur(3 * 3600)).toBe("3h");
+    expect(humanDur(33 * 3600)).toBe("1d9h");
+    expect(humanDur(48 * 3600)).toBe("2d");
+  });
+  test("nonsense is a floor, not NaN on the statusline", () => {
+    expect(humanDur(NaN)).toBe("<1m");
+    expect(humanDur(-5)).toBe("<1m");
+  });
+});
+
+describe("modelField — the model and the two dials that multiply its price", () => {
+  const yellow = "\x1b[33m";
+  test("plain name when the host sends no effort and no fast mode", () => {
+    expect(modelField("claude-fable-5-1", "Fable", undefined, undefined)).toBe("🐉 Fable");
+  });
+  test("effort rides on the model with a slash, so it cannot read as the model's name", () => {
+    expect(modelField("claude-opus-5-5", "Opus", "high", false)).toBe("🎭 Opus/high");
+  });
+  test("max effort and fast mode are the two settings that cost, so they are the two that colour", () => {
+    const out = modelField("claude-fable-5-1", "Fable", "max", true);
+    expect(plainText(out)).toBe("🐉 Fable/max ↯fast");
+    expect(out).toContain(`${yellow}max`);
+    expect(out).toContain(`${yellow}↯fast`);
+    expect(modelField("claude-fable-5-1", "Fable", "xhigh", false)).not.toContain(yellow);
+  });
+  test("an effort level the host does not document is dropped, not rendered", () => {
+    expect(modelField("claude-fable-5-1", "Fable", "turbo", false)).toBe("🐉 Fable");
+    expect(modelField("claude-fable-5-1", "Fable", 7, "yes")).toBe("🐉 Fable");
+  });
+});
+
+describe("prField — the branch's PR and where its review stands", () => {
+  test("nothing without a PR object or a positive integer number", () => {
+    expect(prField(undefined)).toBeNull();
+    expect(prField({})).toBeNull();
+    expect(prField({ number: 0 })).toBeNull();
+    expect(prField({ number: "12" })).toBeNull();
+  });
+  test("GitHub PRs are #n, GitLab merge requests are !n", () => {
+    expect(plainText(prField({ number: 123 }))).toBe("🔀 #123");
+    expect(plainText(prField({ number: 45, kind: "mr" }))).toBe("🔀 !45");
+  });
+  test("each review state has its own glyph, and the approved one is green", () => {
+    expect(plainText(prField({ number: 1, review_state: "approved" }))).toBe("🔀 #1 ✔");
+    expect(prField({ number: 1, review_state: "approved" })).toContain("\x1b[32m");
+    expect(plainText(prField({ number: 1, review_state: "changes_requested" }))).toBe("🔀 #1 ✘");
+    expect(plainText(prField({ number: 1, review_state: "pending" }))).toBe("🔀 #1 ○");
+    expect(plainText(prField({ number: 1, review_state: "draft" }))).toBe("🔀 #1 ✎");
+    expect(plainText(prField({ number: 1, review_state: "merged?" }))).toBe("🔀 #1");
+  });
+  test("a non-https url never becomes a link target", () => {
+    const prev = process.env.REMY_LINKS;
+    process.env.REMY_LINKS = "1";
+    try {
+      expect(prField({ number: 1, url: "https://github.com/o/r/pull/1" })).toContain("\x1b]8;;https://github.com/o/r/pull/1");
+      expect(prField({ number: 1, url: "javascript:alert(1)" })).not.toContain("\x1b]8;;");
+    } finally {
+      if (prev === undefined) delete process.env.REMY_LINKS;
+      else process.env.REMY_LINKS = prev;
+    }
+  });
+});
+
+describe("hostCacheField — the clock, fed by the host's own prompt_cache object", () => {
+  const T0 = Date.UTC(2026, 7, 20, 12, 0, 0);
+  const sec = T0 / 1000;
+  test("no object → undefined, so the caller falls back to the derived clock", () => {
+    expect(hostCacheField(undefined, null, null, T0)).toBeUndefined();
+    expect(hostCacheField(null, null, null, T0)).toBeUndefined();
+    expect(hostCacheField({ warm: true }, null, null, T0)).toBeUndefined(); // no expiry to count down
+  });
+  test("caching_observed false → null: nothing is cached, so there is no clock to show", () => {
+    expect(hostCacheField({ caching_observed: false, warm: false }, null, null, T0)).toBeNull();
+  });
+  test("warm with an expiry counts down in minutes", () => {
+    expect(plainText(hostCacheField({ warm: true, ttl: "1h", expires_at: sec + 52 * 60 + 30 }, null, null, T0))).toBe(
+      "🔥 cache 52m",
+    );
+    expect(hostCacheField({ warm: true, ttl: "1h", expires_at: sec + 8 * 60 }, null, null, T0)).toContain("\x1b[33m");
+  });
+  test("the host's TTL caps a skewed expiry, like the derived clock does", () => {
+    expect(plainText(hostCacheField({ warm: true, ttl: "5m", expires_at: sec + 3600 }, null, null, T0))).toBe(
+      "🔥 cache 5m",
+    );
+  });
+  test("warm:false, or an expiry in the past, is cold", () => {
+    expect(plainText(hostCacheField({ warm: false, expires_at: sec + 3600 }, null, null, T0))).toBe("🧊 cache cold");
+    expect(plainText(hostCacheField({ warm: true, expires_at: sec - 1 }, null, null, T0))).toBe("🧊 cache cold");
+  });
+  test("a model switch is cold whatever the host's flag says — the next request will miss", () => {
+    expect(
+      plainText(hostCacheField({ warm: true, expires_at: sec + 3600 }, "claude-sonnet-5", "claude-opus-5", T0)),
+    ).toBe("🧊 cache cold");
+    // …but the context-window qualifier is not a model switch.
+    expect(
+      plainText(hostCacheField({ warm: true, expires_at: sec + 3600 }, "claude-opus-5", "claude-opus-5[1m]", T0)),
+    ).toBe("🔥 cache 60m");
   });
 });
 

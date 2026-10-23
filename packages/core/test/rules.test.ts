@@ -92,6 +92,10 @@ function sessionRow(overrides: Partial<SessionRow>): SessionRow {
     ctx_agents_tokens: null,
     ctx_mcp_tokens: null,
     ctx_messages_tokens: null,
+    cache_misses: null,
+    cache_miss_tokens: null,
+    cache_miss_cause: null,
+    cache_miss_cause_n: null,
     ...overrides,
   };
 }
@@ -407,6 +411,67 @@ describe("waste signatures", () => {
     // filters to real gaps + fat re-writes, so any count is trustworthy).
     const none = analyzeSession(snapshot({ cacheExpiries: 0, cacheExpiryTokens: 500_000 }));
     expect(none.some((x) => x.tipId === "cache-idle")).toBe(false);
+  });
+
+  test("cache-miss repeats the host's diagnosis in plain words, priced as cold writes", () => {
+    const f = analyzeSession(
+      snapshot({ cacheMisses: 3, cacheMissTokens: 420_000, cacheMissCause: "tools_changed", cacheMissCauseN: 3 }),
+    ).find((x) => x.tipId === "cache-miss");
+    expect(f).toBeDefined();
+    expect(f!.evidence).toEqual({
+      count: 3,
+      cause: "the tool list changed",
+      remedy: "connect MCP servers and plugins before your first prompt, not mid-task",
+      ctx: "140k",
+    });
+    expect(f!.estSavingsTokens).toBe(420_000);
+    expect(f!.estClass).toBe("cold-write");
+  });
+
+  test("cache-miss: one miss is a session start, two is a pattern", () => {
+    const one = analyzeSession(snapshot({ cacheMisses: 1, cacheMissTokens: 200_000, cacheMissCause: "tools_changed" }));
+    expect(one.some((x) => x.tipId === "cache-miss")).toBe(false);
+    // An older host sends no object at all — silence, not a zero.
+    const none = analyzeSession(snapshot({ cacheMisses: null, cacheMissTokens: null, cacheMissCause: null }));
+    expect(none.some((x) => x.tipId === "cache-miss")).toBe(false);
+  });
+
+  test("cache-miss stays silent when nothing the developer did caused it", () => {
+    const server = analyzeSession(
+      snapshot({ cacheMisses: 5, cacheMissTokens: 500_000, cacheMissCause: "likely_server_side", cacheMissCauseN: 5 }),
+    );
+    expect(server.some((x) => x.tipId === "cache-miss")).toBe(false);
+  });
+
+  test("cache-miss yields to cache-idle when the TTL is the cause and the idle story is already filed", () => {
+    const both = analyzeSession(
+      snapshot({
+        cacheExpiries: 1,
+        cacheExpiryTokens: 150_000,
+        cacheExpiryWorstGapMinutes: 45,
+        cacheMisses: 2,
+        cacheMissTokens: 300_000,
+        cacheMissCause: "ttl_expired_5m",
+        cacheMissCauseN: 2,
+      }),
+    );
+    expect(both.some((x) => x.tipId === "cache-idle")).toBe(true);
+    expect(both.some((x) => x.tipId === "cache-miss")).toBe(false);
+    // Without the idle finding, the 5-minute TTL is its own, different advice.
+    const alone = analyzeSession(
+      snapshot({ cacheMisses: 2, cacheMissTokens: 300_000, cacheMissCause: "ttl_expired_5m", cacheMissCauseN: 2 }),
+    );
+    const f = alone.find((x) => x.tipId === "cache-miss");
+    expect(f?.evidence.remedy).toContain("promptCacheTtl");
+  });
+
+  test("cache-miss never echoes a cause word it has not seen before", () => {
+    const f = analyzeSession(
+      snapshot({ cacheMisses: 2, cacheMissTokens: 100_000, cacheMissCause: "some_future_cause", cacheMissCauseN: 2 }),
+    ).find((x) => x.tipId === "cache-miss");
+    expect(f).toBeDefined();
+    expect(JSON.stringify(f!.evidence)).not.toContain("some_future_cause");
+    expect(f!.evidence.cause).toBe("the cached prefix changed");
   });
 
   test("context-band fires after 3 red-zone turns with the excess as savings", () => {

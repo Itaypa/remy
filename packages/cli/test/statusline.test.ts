@@ -145,6 +145,79 @@ describe("coach statusline — one constant layout", () => {
     expect(out).toContain("$1.23");
     expect(out).not.toContain("⏳");
   }, 10_000);
+
+  test("with resets_at, the rate-limit field is paced — the countdown rides along, the colour follows the clock", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    // 20% used with 20 minutes left of five hours: far under pace, no colour.
+    const calm = await runStatusline(
+      basePayload({ rate_limits: { five_hour: { used_percentage: 20, resets_at: now + 20 * 60 } } }),
+    );
+    expect(stripAnsi(calm)).toMatch(/⏳ 20% \(5h\) ↻(19|20)m/);
+    expect(calm).not.toContain("\x1b[33m20%");
+    // 60% used with four hours left: 40 points ahead of the clock → red, and
+    // the tail becomes the forecast.
+    const hot = await runStatusline(
+      basePayload({ rate_limits: { five_hour: { used_percentage: 60, resets_at: now + 4 * 3600 } } }),
+    );
+    expect(hot).toContain("\x1b[31m60%");
+    expect(stripAnsi(hot)).toContain("out in");
+  }, 15_000);
+
+  test("effort and fast mode ride on the model field", async () => {
+    const out = await runStatusline(basePayload({ effort: { level: "xhigh" }, fast_mode: true }));
+    expect(stripAnsi(out)).toContain("Fable/xhigh ↯fast");
+  }, 10_000);
+
+  test("the branch's PR sits after the branch", async () => {
+    const out = stripAnsi(
+      await runStatusline(basePayload({ pr: { number: 42, url: "https://github.com/o/r/pull/42", review_state: "approved" } })),
+    );
+    expect(out).toContain("🌿 main · 🔀 #42 ✔");
+  }, 10_000);
+
+  test("the host's prompt_cache object drives the clock when it is there, without any hook having run", async () => {
+    // No Stop hook, no transcript, no TTL ever observed on this machine — and
+    // still a clock, because the host now says exactly when the cache expires.
+    const expires = Math.floor(Date.now() / 1000) + 31 * 60 + 30;
+    const out = stripAnsi(
+      await runStatusline(basePayload({ prompt_cache: { warm: true, caching_observed: true, ttl: "1h", expires_at: expires } })),
+    );
+    expect(out).toContain("🔥 cache 31m");
+    const cold = stripAnsi(
+      await runStatusline(basePayload({ prompt_cache: { warm: false, caching_observed: true, ttl: "1h", expires_at: null } })),
+    );
+    expect(cold).toContain("🧊 cache cold");
+  }, 15_000);
+
+  test("the host's miss diagnosis is copied into the session row — and only when the count moves", async () => {
+    const pc = {
+      warm: true,
+      caching_observed: true,
+      ttl: "1h",
+      expires_at: Math.floor(Date.now() / 1000) + 3000,
+      misses: 2,
+      miss_recache_tokens: 300_000,
+      miss_causes: { tools_changed: 2 },
+      last_miss_cause: { causes: ["tools_changed"], tools_added: 3 },
+    };
+    await runStatusline(basePayload({ prompt_cache: pc }));
+    const read = () => {
+      const db = new Database(join(dataDir, "remy.db"), { readonly: true });
+      const row = db
+        .query(`SELECT cache_misses, cache_miss_tokens, cache_miss_cause, cache_miss_cause_n FROM sessions WHERE session_id = 'sess-1'`)
+        .get() as Record<string, unknown>;
+      db.close();
+      return row;
+    };
+    expect(read()).toEqual({ cache_misses: 2, cache_miss_tokens: 300_000, cache_miss_cause: "tools_changed", cache_miss_cause_n: 2 });
+    // Same count, different tokens: no write. The statusline runs once a
+    // second and the steady state must stay read-only.
+    await runStatusline(basePayload({ prompt_cache: { ...pc, miss_recache_tokens: 999_999 } }));
+    expect(read().cache_miss_tokens).toBe(300_000);
+    // The count moves: the row follows.
+    await runStatusline(basePayload({ prompt_cache: { ...pc, misses: 3, miss_recache_tokens: 450_000 } }));
+    expect(read()).toMatchObject({ cache_misses: 3, cache_miss_tokens: 450_000 });
+  }, 20_000);
 });
 
 // The cache clock is the one statusline field with a whole pipeline behind it:

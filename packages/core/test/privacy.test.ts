@@ -19,6 +19,8 @@ import {
   setEffortMix,
   setAutoMemoryBytes,
   setCacheClock,
+  setCacheMisses,
+  cacheMissesFromPayload,
   touchCacheAnchor,
   sanitizeContextProfile,
   setContextProfile,
@@ -400,10 +402,47 @@ describe("privacy gate", () => {
     setAutoMemoryBytes(db, "s1", hostile);
     setCacheClock(db, "s1", hostile as unknown as number, hostile);
     touchCacheAnchor(db, "s1", hostile);
+    setCacheMisses(db, "s1", { misses: hostile, recacheTokens: hostile, cause: hostile, causeCount: hostile });
 
     const dump = JSON.stringify((db as Database).query("SELECT * FROM sessions").all());
     expect(dump).not.toContain(MARKER);
     expect(dump).not.toContain("/Users");
+  });
+
+  test("a cache-miss cause is a host enum word or nothing — never the host's prose", () => {
+    // The one TEXT column the statusline writes from `prompt_cache`. The host
+    // names causes as snake_case identifiers; anything else that arrives in
+    // that slot — a sentence, a path, a marker — is stored as "no cause", and
+    // the count that went with it is zeroed so the row never claims a cause it
+    // dropped. The numbers still land: a miss count is a miss count whatever
+    // the cause field held.
+    const db = openDb(":memory:");
+    upsertSession(db, { session_id: "s1", ts: "2026-07-26T10:00:00.000Z" });
+    setCacheMisses(db, "s1", { misses: 3, recacheTokens: 120_000, cause: `/Users/x/${MARKER}`, causeCount: 2 });
+    let row = getSession(db, "s1")!;
+    expect(row.cache_misses).toBe(3);
+    expect(row.cache_miss_tokens).toBe(120_000);
+    expect(row.cache_miss_cause).toBeNull();
+    expect(row.cache_miss_cause_n).toBe(0);
+
+    setCacheMisses(db, "s1", { misses: 3, recacheTokens: 120_000, cause: "tools_changed", causeCount: 2 });
+    row = getSession(db, "s1")!;
+    expect(row.cache_miss_cause).toBe("tools_changed");
+    expect(row.cache_miss_cause_n).toBe(2);
+
+    // And the payload reader in front of it carries nothing but numbers and
+    // that one word, whatever else the host's object holds.
+    const stats = cacheMissesFromPayload({
+      prompt_cache: {
+        misses: 2,
+        miss_recache_tokens: 50_000,
+        miss_causes: { tools_changed: 2 },
+        last_miss_cause: { causes: ["tools_changed"], note: MARKER },
+        transcript: MARKER,
+      },
+    });
+    expect(JSON.stringify(stats)).not.toContain(MARKER);
+    expect(stats).toEqual({ misses: 2, recacheTokens: 50_000, cause: "tools_changed", causeCount: 2 });
   });
 
   test("no table grows a free-text column without this test being updated", () => {
@@ -424,6 +463,7 @@ describe("privacy gate", () => {
         sub_model: "ModelStr — charset-gated at the write site",
         cache_anchor_at: "IsoTs — regex-gated at the write site (touchCacheAnchor)",
         cache_model: "ModelStr — charset-gated at the write site (setCacheClock)",
+        cache_miss_cause: "CacheMissCause — [a-z0-9_] host enum name, charset-gated at the write site (setCacheMisses)",
       },
       events: {
         session_id: "IdStr", ts: "ISO timestamp", host: "HostStr enum-shaped",
@@ -478,6 +518,7 @@ describe("privacy gate", () => {
     const REVIEWED = [
       "setAutoMemoryBytes", // sessions.auto_memory_bytes — driven above
       "setCacheClock", //      sessions.cache_ttl_ms/cache_model — driven above
+      "setCacheMisses", //     sessions.cache_miss*      — driven above
       "setClaudeMdBytes", //   sessions.claude_md_bytes  — driven above
       "setContextProfile", //  sessions.ctx_* + context_profile — typed to the parsed profile; gate driven above
       "setEffortMix", //       sessions.effort_*         — driven above

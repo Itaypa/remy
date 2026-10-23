@@ -32,21 +32,162 @@ export function fmtCost(n: number | null | undefined): string | null {
   return `$${n.toFixed(2)}`;
 }
 
-/** Claude.ai Pro/Max only — payload.rate_limits is absent otherwise. Shows
- * whichever window (5h/7d) is closer to its cap, since that's the one
- * actually actionable right now. */
-export function rateLimitBadge(rateLimits: unknown): string | null {
-  const rl = rateLimits as { five_hour?: { used_percentage?: number }; seven_day?: { used_percentage?: number } } | null;
-  const five = rl?.five_hour?.used_percentage;
-  const seven = rl?.seven_day?.used_percentage;
-  if (typeof five !== "number" && typeof seven !== "number") return null;
-  const worse =
-    typeof five === "number" && (typeof seven !== "number" || five >= seven)
-      ? { pct: five, label: "5h" }
-      : { pct: seven as number, label: "7d" };
-  const rounded = Math.round(worse.pct);
-  const pctStr = rounded >= 80 ? ansi("red", `${rounded}%`) : rounded >= 60 ? ansi("yellow", `${rounded}%`) : `${rounded}%`;
-  return `⏳ ${pctStr} (${worse.label})`;
+// --- Rate-limit pace --------------------------------------------------------
+//
+// A used-percentage on its own is not actionable: 43% of the 5-hour window
+// with four hours still to run is a lockout in the making, and 43% with twenty
+// minutes left is headroom about to go unspent. Same digits, opposite advice.
+// The host hands us `resets_at` alongside the percentage, so the badge compares
+// what you have used against how far through the window you are, and colours
+// by THAT. A lockout is the single most expensive waste event a subscriber has
+// (it costs the rest of the window), and pace is the earliest cheap warning.
+
+/** Window lengths, in seconds, as the host names them. */
+const WINDOW_SECONDS = { five_hour: 5 * 3600, seven_day: 7 * 86_400 } as const;
+type WindowKey = keyof typeof WINDOW_SECONDS;
+const WINDOW_LABEL: Record<WindowKey, string> = { five_hour: "5h", seven_day: "7d" };
+
+/** Points over the clock before the field turns yellow, then red. Ten points
+ * on a 5-hour window is half an hour of budget spent early — noticeable,
+ * recoverable. Twenty-five is a quarter of the window gone ahead of time. */
+export const PACE_WARN_POINTS = 10;
+export const PACE_RED_POINTS = 25;
+/** Past this, red regardless of pace: the wall is close enough that one fat
+ * turn ends the window, however good the pacing looked. */
+const PACE_HARD_PCT = 90;
+
+/** The 7-day window is paced in AWAKE hours. A week has nights in it, and a
+ * budget line that keeps rising while you sleep reads red every morning for
+ * nothing you did. Default: the day rolls over at 2am and the next six hours
+ * carry no weight. Local time, so the offset is a parameter — tests pass 0. */
+export const PACE_DAY_START_HOUR = 2;
+export const PACE_SLEEP_HOURS = 6;
+
+/** Seconds in [a, b) that fall outside the nightly sleep block, in local time.
+ * `tzOffsetMin` is `Date#getTimezoneOffset()` — minutes to ADD to local time
+ * to reach UTC, so local = utc − offset. */
+export function awakeSeconds(
+  a: number,
+  b: number,
+  tzOffsetMin: number,
+  dayStartHour: number = PACE_DAY_START_HOUR,
+  sleepHours: number = PACE_SLEEP_HOURS,
+): number {
+  if (!(b > a)) return 0;
+  const DAY = 86_400;
+  const sleep = sleepHours * 3600;
+  const la = a - tzOffsetMin * 60;
+  const lb = b - tzOffsetMin * 60;
+  let asleep = 0;
+  // Walk every day-start from the one at or before `a` to the last before `b`.
+  let dayStart = Math.floor((la - dayStartHour * 3600) / DAY) * DAY + dayStartHour * 3600;
+  for (; dayStart < lb; dayStart += DAY) {
+    const lo = Math.max(la, dayStart);
+    const hi = Math.min(lb, dayStart + sleep);
+    if (hi > lo) asleep += hi - lo;
+  }
+  return b - a - asleep;
+}
+
+/** "2h10m", "45m", "1d9h", "<1m" — minute resolution, like the cache clock. */
+export function humanDur(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 60) return "<1m";
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 === 0 ? `${hours}h` : `${hours}h${String(mins % 60).padStart(2, "0")}m`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 === 0 ? `${days}d` : `${days}d${hours % 24}h`;
+}
+
+interface Pace {
+  pct: number;
+  label: string;
+  /** Points used minus points of the window elapsed. Positive = ahead of the
+   * clock (burning too fast). null when the host sent no `resets_at`. */
+  delta: number | null;
+  /** Seconds until the window resets, or null without `resets_at`. */
+  resetIn: number | null;
+  /** Seconds until 100% at the current average rate, or null. */
+  outIn: number | null;
+}
+
+function paceOf(w: unknown, key: WindowKey, nowSec: number, tzOffsetMin: number): Pace | null {
+  const o = w as { used_percentage?: unknown; resets_at?: unknown } | null | undefined;
+  if (!o || typeof o.used_percentage !== "number" || !Number.isFinite(o.used_percentage)) return null;
+  const pct = o.used_percentage;
+  const label = WINDOW_LABEL[key];
+  const len = WINDOW_SECONDS[key];
+  if (typeof o.resets_at !== "number" || !Number.isFinite(o.resets_at)) {
+    return { pct, label, delta: null, resetIn: null, outIn: null };
+  }
+  const resetIn = Math.min(len, Math.max(0, o.resets_at - nowSec));
+  const elapsed = len - resetIn;
+  const start = o.resets_at - len;
+  // The week is paced in awake hours; the 5-hour window is a plain clock.
+  const elapsedShare =
+    key === "seven_day"
+      ? awakeSeconds(start, nowSec, tzOffsetMin) / Math.max(1, awakeSeconds(start, o.resets_at, tzOffsetMin))
+      : elapsed / len;
+  const delta = pct - Math.min(1, Math.max(0, elapsedShare)) * 100;
+  // Linear projection on wall-clock elapsed: at this average rate, how long
+  // until the budget is gone. Only shown when over pace, where by construction
+  // it lands before the reset.
+  const outIn = pct > 0 && elapsed > 0 ? ((100 - pct) / pct) * elapsed : null;
+  return { pct, label, delta, resetIn, outIn };
+}
+
+/** Claude.ai Pro/Max only — payload.rate_limits is absent otherwise.
+ *
+ * Shows one window. With `resets_at` in hand, the one furthest ahead of its
+ * clock, since that is the one that needs a decision; a window past 90% wins
+ * outright, because at that point pace no longer matters. On an older host
+ * that sends no `resets_at`, falls back to whichever is closer to its cap and
+ * to the fixed 60/80 colouring.
+ *
+ * Renders `⏳ 43% (5h) ↻2h10m` on pace, and `⏳ 62% (5h) out in 1h20m` once
+ * ahead of it — the forecast replaces the countdown because it is the more
+ * actionable of the two numbers at that moment (and the gap between them is
+ * the lockout you are heading for). Pace colours the percentage: yellow at
+ * +10 points over the clock, red at +25 or past 90% used. Under pace there is
+ * no colour, which is itself information — the quota will reset unspent, so
+ * now is the time for the expensive run. */
+export function rateLimitBadge(
+  rateLimits: unknown,
+  nowMs: number = Date.now(),
+  tzOffsetMin: number = new Date(nowMs).getTimezoneOffset(),
+): string | null {
+  const rl = rateLimits as { five_hour?: unknown; seven_day?: unknown } | null | undefined;
+  const nowSec = nowMs / 1000;
+  const windows = [paceOf(rl?.five_hour, "five_hour", nowSec, tzOffsetMin), paceOf(rl?.seven_day, "seven_day", nowSec, tzOffsetMin)].filter(
+    (p): p is Pace => p !== null,
+  );
+  if (windows.length === 0) return null;
+  const byPct = [...windows].sort((a, b) => b.pct - a.pct)[0]!;
+  const allPaced = windows.every((p) => p.delta !== null);
+  const pick =
+    byPct.pct >= PACE_HARD_PCT || !allPaced ? byPct : [...windows].sort((a, b) => b.delta! - a.delta!)[0]!;
+
+  const rounded = Math.round(pick.pct);
+  let tone: "red" | "yellow" | null;
+  if (pick.delta === null) {
+    tone = rounded >= 80 ? "red" : rounded >= 60 ? "yellow" : null;
+  } else {
+    tone =
+      rounded >= PACE_HARD_PCT || pick.delta >= PACE_RED_POINTS
+        ? "red"
+        : pick.delta >= PACE_WARN_POINTS
+          ? "yellow"
+          : null;
+  }
+  const paint = (s: string) => (tone ? ansi(tone, s) : s);
+  const overPace = pick.delta !== null && pick.delta >= PACE_WARN_POINTS && pick.outIn !== null;
+  const tail = overPace
+    ? ` ${paint(`out in ${humanDur(pick.outIn!)}`)}`
+    : pick.resetIn !== null
+      ? ` ${ansi("dim", `↻${humanDur(pick.resetIn)}`)}`
+      : "";
+  return `⏳ ${paint(`${rounded}%`)} (${pick.label})${tail}`;
 }
 
 /** One spend field, chosen by plan type — never both. Falls back to $ cost
@@ -186,11 +327,56 @@ export function cacheField(
   if (!Number.isFinite(anchor)) return null;
   const left = ttlMs - (now - anchor);
   if (left <= 0) return cold;
-  // A clock in the future is a clock skew or a hand-edited row, not warmth we
-  // measured — clamp rather than promise more than the TTL.
-  const mins = Math.min(Math.ceil(ttlMs / 60_000), Math.floor(left / 60_000));
+  return warmField(left, ttlMs);
+}
+
+/** `🔥 cache 52m` for a cache with `leftMs` to live. A clock in the future is
+ * a clock skew or a hand-edited row, not warmth we measured — clamped to the
+ * TTL when one is known rather than promising more than the host sells. */
+function warmField(leftMs: number, ttlMs: number | null): string {
+  const cap = ttlMs !== null ? Math.ceil(ttlMs / 60_000) : Infinity;
+  const mins = Math.min(cap, Math.floor(leftMs / 60_000));
   const value = mins < 1 ? "<1m" : `${mins}m`;
-  return `🔥 cache ${left <= CACHE_LOW_MS ? ansi("yellow", value) : value}`;
+  return `🔥 cache ${leftMs <= CACHE_LOW_MS ? ansi("yellow", value) : value}`;
+}
+
+/** The same clock, fed by the host instead of by us. Claude Code ≥ 2.1.251
+ * ships a `prompt_cache` object on the statusline payload with the exact
+ * `expires_at` of the main conversation's cached prefix, which beats a TTL we
+ * inferred from the transcript and an anchor we stamped one response late.
+ * cacheField() stays as the fallback for older hosts.
+ *
+ * Three-way result, because the fallback is only right in one of the three:
+ *   - a string: the host told us warm-with-expiry or cold → render it;
+ *   - null: the host says caching is not happening at all
+ *     (`caching_observed: false` — API-side disabled, or a gateway that drops
+ *     the markers), so there is nothing to clock and our derived number would
+ *     be a fiction → render no field;
+ *   - undefined: no usable object (older host, pre-first-response) → the
+ *     caller falls back to cacheField().
+ * The per-model override stays on top: the host's `warm` describes the entry
+ * the LAST request touched, and a `/model` switch makes the next one miss
+ * before that flag has any reason to move. */
+export function hostCacheField(
+  promptCache: unknown,
+  cacheModel: string | null | undefined,
+  liveModel: string | null | undefined,
+  now: number = Date.now(),
+): string | null | undefined {
+  const o = promptCache as
+    | { warm?: unknown; caching_observed?: unknown; ttl?: unknown; expires_at?: unknown }
+    | null
+    | undefined;
+  if (!o || typeof o !== "object") return undefined;
+  if (o.caching_observed === false) return null;
+  const cold = ansi("cyan", "🧊 cache cold");
+  if (cacheModel && liveModel && baseModel(cacheModel) !== baseModel(liveModel)) return cold;
+  if (o.warm === false) return cold;
+  if (typeof o.expires_at !== "number" || !Number.isFinite(o.expires_at)) return undefined;
+  const left = o.expires_at * 1000 - now;
+  if (left <= 0) return cold;
+  const ttlMs = o.ttl === "5m" ? 5 * 60_000 : o.ttl === "1h" ? 60 * 60_000 : null;
+  return warmField(left, ttlMs);
 }
 
 export function bar(pct: number, width = 10): string {
@@ -207,12 +393,74 @@ export function modelEmoji(modelId: string | null | undefined): string {
   return "🤖";
 }
 
+/** The effort levels the host documents. Anything else — a future level, a
+ * typo, a hostile payload — is dropped rather than rendered. */
+const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+/** `🐉 Fable/xhigh ↯fast` — the model, and the two dials that multiply its
+ * price. Effort and fast mode belong on the model field rather than on their
+ * own because that is what they are: `max` on a top-tier model is the most
+ * expensive seat in the house, and fast mode doubles the token price of
+ * whatever is in it. Both are quiet until they cost something — only `max`
+ * and the fast marker take colour, in the dirty-dot's "attention, not alarm"
+ * yellow. The slash binds the level to the model so `Fable max` is never read
+ * as a model called that. Absent effort (a model without the dial) renders the
+ * plain name, as before. */
+export function modelField(
+  modelId: string | null | undefined,
+  displayName: string | null | undefined,
+  effortLevel: unknown,
+  fastMode: unknown,
+): string {
+  let s = `${modelEmoji(modelId)} ${displayName ?? "Claude"}`;
+  if (typeof effortLevel === "string" && EFFORT_LEVELS.has(effortLevel)) {
+    s += `/${effortLevel === "max" ? ansi("yellow", effortLevel) : effortLevel}`;
+  }
+  if (fastMode === true) s += ` ${ansi("yellow", "↯fast")}`;
+  return s;
+}
+
+/** Review state glyphs for the PR field. The approved tick is the one green
+ * thing on the line, which is deliberate: it is the only state that says "you
+ * are done here". A function, not a module const: it needs ansi(), whose
+ * colour table is declared further down this file. */
+function prStateGlyph(state: string): string | undefined {
+  switch (state) {
+    case "approved":
+      return ansi("green", "✔");
+    case "changes_requested":
+      return ansi("red", "✘");
+    case "pending":
+      return ansi("dim", "○");
+    case "draft":
+      return ansi("dim", "✎");
+    default:
+      return undefined;
+  }
+}
+
+/** `🔀 #123 ✔` — the branch's open pull request and where its review stands.
+ * Straight off the host's `pr` object (it mirrors the footer badge, so no
+ * network call of ours); a GitLab merge request renders `!123`. The number is
+ * a cmd-click link to the PR on terminals that support OSC 8. Absent outside a
+ * repo, before a PR exists, and once it merges — the host drops the object. */
+export function prField(pr: unknown): string | null {
+  const p = pr as { number?: unknown; url?: unknown; review_state?: unknown; kind?: unknown } | null | undefined;
+  if (!p || typeof p !== "object") return null;
+  if (typeof p.number !== "number" || !Number.isInteger(p.number) || p.number <= 0) return null;
+  const ref = `${p.kind === "mr" ? "!" : "#"}${p.number}`;
+  const url = typeof p.url === "string" && /^https:\/\/\S+$/.test(p.url) ? p.url : undefined;
+  const state = typeof p.review_state === "string" ? prStateGlyph(p.review_state) : undefined;
+  return `🔀 ${linkify(ref, url)}${state ? ` ${state}` : ""}`;
+}
+
 const ANSI = {
   reset: "\x1b[0m",
   dim: "\x1b[2m",
   bold: "\x1b[1m",
   underline: "\x1b[4m",
   red: "\x1b[31m",
+  green: "\x1b[32m",
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
 };

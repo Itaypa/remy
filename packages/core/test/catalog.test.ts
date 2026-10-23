@@ -42,6 +42,12 @@ const SAMPLE_EVIDENCE: Record<string, Record<string, string | number>> = {
   "rule-of-five": {},
   "spec-first": {},
   "cache-idle": { count: 3, mins: 145, gap: "2.4h", ctx: "190k" },
+  "cache-miss": {
+    count: 12,
+    cause: "the 5-min cache expired between turns",
+    ctx: "190k",
+    remedy: "set promptCacheTtl to 1h, or keep turns under 5 min apart",
+  },
   "cache-clock": {},
   "plan-review": {},
 };
@@ -168,6 +174,7 @@ describe("tip catalog", () => {
     "subagent-offload": { reads: 15 }, // SUBAGENT_MIN_DISTINCT_READS
     "tools-over-bash": { count: 6, bash_total: 6 }, // BASH_READ_MIN
     "context-band": { turns: 3, total_turns: 3 }, // RED_ZONE_MIN_TURNS
+    "cache-miss": { count: 2 }, // CACHE_MISS_MIN
     "model-fit": { n: 4, total: 4 }, // MODEL_FIT_MIN_SESSIONS
   };
 

@@ -1,6 +1,7 @@
 import { envVar } from "./env";
 import { hashPath } from "./schema";
 import type { TokenUsage } from "./schema";
+import type { CacheMissStats } from "./store";
 
 // Reads Claude Code transcript JSONL. Only metadata survives extraction:
 // token usage, model ids, tool names, and sha256/16 hashes of tool targets.
@@ -653,4 +654,43 @@ export function contextFromPayload(payload: unknown): ContextInfo | null {
     model: typeof model === "string" ? model : null,
     limit,
   };
+}
+
+/** The host's prompt-cache miss diagnosis, off the statusLine payload's
+ * `prompt_cache` object (Claude Code ≥ 2.1.251; causes ≥ 2.1.260). Returns
+ * null when the object is absent or carries no usable count, so a caller on
+ * an older host stores nothing rather than a zero that would read as "no
+ * misses". Numbers and one enum-shaped word only — the cause is the most
+ * frequent entry of `miss_causes`, falling back to the first cause the host
+ * named for the last miss; the charset gate at the write site (store.ts)
+ * decides whether it is storable at all. */
+export function cacheMissesFromPayload(payload: unknown): CacheMissStats | null {
+  if (!payload || typeof payload !== "object") return null;
+  const pc = (payload as any).prompt_cache;
+  if (!pc || typeof pc !== "object") return null;
+  const whole = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
+  const misses = whole(pc.misses);
+  if (misses === null) return null;
+  const recacheTokens = whole(pc.miss_recache_tokens) ?? 0;
+  let cause: string | null = null;
+  let causeCount = 0;
+  const causes = pc.miss_causes;
+  if (causes && typeof causes === "object") {
+    for (const [k, v] of Object.entries(causes as Record<string, unknown>)) {
+      const n = whole(v);
+      if (n !== null && n > causeCount) {
+        cause = k;
+        causeCount = n;
+      }
+    }
+  }
+  if (cause === null) {
+    const last = pc.last_miss_cause?.causes;
+    if (Array.isArray(last) && typeof last[0] === "string") {
+      cause = last[0];
+      causeCount = 1;
+    }
+  }
+  return { misses, recacheTokens, cause, causeCount };
 }
