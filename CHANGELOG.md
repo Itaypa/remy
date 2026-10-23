@@ -63,6 +63,17 @@ repeats the diagnosis as a tip with a cause-specific remedy from a closed set. O
 TEXT column, `cache_miss_cause`, charset-gated to the host's snake_case enum shape and
 registered in the privacy suite; `likely_server_side` is deliberately never coached.
 
+**One ping a day, carrying nothing — and the privacy promise reworded to match.** REMY had
+no way to know how many people run it. The launcher (`bin/remy`) now GETs a one-byte
+`ping-<os>-<arch>` asset on the running version's GitHub release, once per machine per UTC
+day, detached from the hook so nothing ever waits on it: no payload, no id, no cookie,
+nothing from any session. GitHub's download counter for that asset is the daily-active
+count; `bun run analytics` reads it back. `remy analytics --off` or `REMY_ANALYTICS=0`
+stops it, and a dev build never pings. The promise therefore changes from *nothing ever
+leaves your machine* to **nothing about your work ever leaves your machine** — in
+CLAUDE.md, the README, the marketplace listing and `remy help` — and `privacy.test.ts` now
+pins every `curl` in the launcher to a download of a release asset that sends nothing.
+
 Also: `claude plugin validate` is a preflight gate; `.mcp.json`/`~/.claude.json` are read
 (never written) to name a server at render time; the stray 🐀 is a 🐭 everywhere.
 
